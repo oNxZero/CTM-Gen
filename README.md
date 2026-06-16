@@ -88,7 +88,7 @@ Settings (theme, last save folder) live in:
 
 ## 🤝 Credits
 
-* **[Minecraft-Connected-Textures-Generator-CTM]([https://github.com/22or/Auto-CTM](https://github.com/Rostezkiy/Minecraft-Connected-Textures-Generator-CTM))** by 22or — original CTM tile indexing concept.
+* **[Minecraft-Connected-Textures-Generator-CTM](https://github.com/Rostezkiy/Minecraft-Connected-Textures-Generator-CTM)** by Rostezkiy — original CTM tile indexing concept.
 * **[Moonlight](https://github.com/oNxZero/Moonlight)** by oNxZero — theme palette inspiration.
 
 This is a full rewrite: new UI, preview engine, paint tools, and export flow.
