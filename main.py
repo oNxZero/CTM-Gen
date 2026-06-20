@@ -1196,6 +1196,22 @@ def main(page: ft.Page):
     toast_token = {"id": 0}
     preview_viewport = {"w": 800, "h": 600}
     resize_token = {"id": 0}
+    preview_has_texture = {"active": False}
+
+    def safe_page_update(*controls):
+        try:
+            page.update(*controls)
+        except RuntimeError:
+            pass
+
+    def repaint_preview(live=False):
+        if engine.base_image is None:
+            return None
+        rendered, tile_idx = engine.render_preview(
+            preview_viewport["w"], preview_viewport["h"], live=live
+        )
+        preview_image.src = pil_to_src(rendered, fast=live)
+        return tile_idx
 
     empty_state_icon = ft.Icon(ft.Icons.GRID_VIEW_ROUNDED, size=40, color=C_MUTED)
     empty_state_title = ft.Text(
@@ -1616,7 +1632,7 @@ def main(page: ft.Page):
             if toast_token["id"] != token:
                 return
             status_toast.value = ""
-            page.update(status_toast)
+            safe_page_update(status_toast)
 
         page.run_task(hide_toast)
 
@@ -1627,71 +1643,76 @@ def main(page: ft.Page):
         if not force and now - draw_update_clock["t"] < 0.016:
             return
         draw_update_clock["t"] = now
-        rendered, _ = engine.render_preview(
-            preview_viewport["w"], preview_viewport["h"], live=True
-        )
-        preview_image.src = pil_to_src(rendered, fast=True)
-        page.update(preview_image)
+        repaint_preview(live=True)
+        safe_page_update(preview_image)
 
     def refresh_preview():
         if engine.base_image is None:
-            preview_inner.content = ft.Container(
-                content=empty_state,
-                alignment=ft.Alignment(0, 0),
-                expand=True,
-            )
+            if preview_has_texture["active"]:
+                preview_has_texture["active"] = False
+                preview_inner.content = ft.Container(
+                    content=empty_state,
+                    alignment=ft.Alignment(0, 0),
+                    expand=True,
+                )
             preview_meta.value = ""
             paint_toolbar.visible = False
-            page.update(preview_inner, preview_meta, paint_toolbar, preview_title)
+            safe_page_update(
+                preview_inner, preview_meta, paint_toolbar, preview_title
+            )
             return
 
-        preview_inner.content = ft.Container(
-            content=preview_gesture,
-            expand=True,
-        )
-        paint_toolbar.visible = True
-        rendered, tile_idx = engine.render_preview(
-            preview_viewport["w"], preview_viewport["h"]
-        )
-        preview_image.src = pil_to_src(rendered)
+        layout_changed = False
+        if not preview_has_texture["active"]:
+            preview_has_texture["active"] = True
+            preview_inner.content = ft.Container(
+                content=preview_gesture,
+                expand=True,
+            )
+            paint_toolbar.visible = True
+            layout_changed = True
+
+        tile_idx = repaint_preview()
         preview_title.value = "Preview"
         preview_meta.value = (
             f"Tile {tile_idx:02d} of 46  ·  "
             f"{engine.base_image.size[0]}×{engine.base_image.size[1]}"
         )
         tile_value.value = f"{tile_idx:02d} / 46"
-        page.update(
-            preview_inner,
+        controls = [
             preview_image,
-            preview_tile_box,
-            preview_gesture,
             preview_meta,
             preview_title,
             tile_value,
             paint_toolbar,
-        )
+        ]
+        if layout_changed:
+            controls.insert(0, preview_inner)
+        safe_page_update(*controls)
 
 
     def on_preview_resize(e: ft.LayoutSizeChangeEvent):
         w = max(int(e.width or 800), 200)
         h = max(int(e.height or 600), 200)
-        if w == preview_viewport["w"] and h == preview_viewport["h"]:
+        old_w, old_h = preview_viewport["w"], preview_viewport["h"]
+        if w == old_w and h == old_h:
             return
+        if engine.base_image is not None:
+            engine.preview_pan_x += (w - old_w) / 2
+            engine.preview_pan_y += (h - old_h) / 2
         preview_viewport["w"] = w
         preview_viewport["h"] = h
+        if engine.base_image is None:
+            return
         resize_token["id"] += 1
         token = resize_token["id"]
 
         async def deferred(_=None):
-            await asyncio.sleep(0.05)
-            if resize_token["id"] != token or engine.base_image is None:
+            await asyncio.sleep(0.12)
+            if resize_token["id"] != token:
                 return
-            cx, cy = preview_viewport["w"] / 2, preview_viewport["h"] / 2
-            min_z, max_z = zoom_limits_for_texture()
-            engine.apply_zoom_at(
-                engine.zoom, cx, cy, max_zoom=max_z, min_zoom=min_z
-            )
-            refresh_preview()
+            repaint_preview()
+            safe_page_update(preview_image)
 
         page.run_task(deferred)
 
@@ -2474,7 +2495,7 @@ def main(page: ft.Page):
             preview_viewport["w"], preview_viewport["h"], live=live
         )
         preview_image.src = pil_to_src(rendered, fast=live)
-        page.update(preview_image)
+        safe_page_update(preview_image)
 
     def schedule_zoom_finalize():
         zoom_finalize_token["id"] += 1
@@ -2483,7 +2504,10 @@ def main(page: ft.Page):
         async def finalize(_=None):
             await asyncio.sleep(0.12)
             if zoom_finalize_token["id"] == token and engine.base_image is not None:
-                refresh_zoom_preview(live=False)
+                try:
+                    refresh_zoom_preview(live=False)
+                except RuntimeError:
+                    pass
 
         page.run_task(finalize)
 
@@ -2852,9 +2876,10 @@ def main(page: ft.Page):
         page.run_task(remeasure_preview)
 
     async def remeasure_preview(_=None):
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.12)
         if engine.base_image is not None:
-            refresh_preview()
+            repaint_preview()
+            safe_page_update(preview_image)
 
     def load_outline_path(path):
         try:
