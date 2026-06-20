@@ -28,6 +28,7 @@ Drop your own screenshot in as `assets/demo.png` whenever you want to update thi
 * **Custom PNG mode:** Bring your own hand-drawn frame texture; the tool handles the slicing logic.
 * **Paint tools:** Pick, brush, and fill on the loaded texture, with undo/redo.
 * **Guide overlay:** Optional red lines show exactly where borders get cut.
+* **Debug tile IDs:** Optional export mode stamps each tile with its index (`0`–`46`) in bright red — load the pack in-game to see which CTM tile OptiFine picks on each face.
 * **Themes:** Moonlight, Light, Dark, Obsidian, Catppuccin, Dracula, and Nord — palettes adapted from [Moonlight](https://github.com/oNxZero/Moonlight).
 * **Inline status:** Save confirmations show next to the preview (`Saved to /path/to/pack`).
 
@@ -65,6 +66,8 @@ Zoom in, toggle **Show guide lines**, and use the paint toolbar if you need smal
 ### 4. Generate the pack
 
 Click **Generate pack**, pick an output folder, and the app creates a subfolder with all 47 tiles and the properties file.
+
+Turn on **Debug tile IDs** (in the Export panel) when troubleshooting CTM in-game. Each exported tile gets a small red pixel number centered inside the border area. Place blocks in Minecraft, note which numbers appear on broken faces, then turn debug off and regenerate a clean pack when you're done.
 
 ### 5. Drop it in your resource pack
 

@@ -350,6 +350,66 @@ CTM_RULES = [
     (1, 1, 1, 1, 0, 0, 0, 0),
 ]
 
+# 3×5 pixel digits — no anti-aliasing, solid red only
+_DIGIT_3X5 = {
+    "0": ("###", "#.#", "#.#", "#.#", "###"),
+    "1": (".#.", "##.", ".#.", ".#.", "###"),
+    "2": ("###", "..#", "###", "#..", "###"),
+    "3": ("###", "..#", "###", "..#", "###"),
+    "4": ("#.#", "#.#", "###", "..#", "..#"),
+    "5": ("###", "#..", "###", "..#", "###"),
+    "6": ("###", "#..", "###", "#.#", "###"),
+    "7": ("###", "..#", "..#", "..#", "..#"),
+    "8": ("###", "#.#", "###", "#.#", "###"),
+    "9": ("###", "#.#", "###", "..#", "###"),
+}
+_DIGIT_W = 3
+_DIGIT_H = 5
+_DIGIT_GAP = 1
+
+
+def _render_pixel_digits(text, scale):
+    count = len(text)
+    raw_w = count * _DIGIT_W + (count - 1) * _DIGIT_GAP
+    raw_h = _DIGIT_H
+    layer = Image.new("RGBA", (raw_w, raw_h), (0, 0, 0, 0))
+    px = layer.load()
+    red = (255, 0, 0, 255)
+    for i, ch in enumerate(text):
+        glyph = _DIGIT_3X5[ch]
+        ox = i * (_DIGIT_W + _DIGIT_GAP)
+        for row, line in enumerate(glyph):
+            for col, cell in enumerate(line):
+                if cell == "#":
+                    px[ox + col, row] = red
+    if scale > 1:
+        layer = layer.resize(
+            (raw_w * scale, raw_h * scale), Image.Resampling.NEAREST
+        )
+    return layer
+
+
+def overlay_tile_index(image, index, border_width=0):
+    img = image.copy()
+    w, h = img.size
+    bw = max(0, int(border_width))
+    inner_l = bw
+    inner_t = bw
+    inner_r = w - bw
+    inner_b = h - bw
+    inner_w = max(1, inner_r - inner_l)
+    inner_h = max(1, inner_b - inner_t)
+
+    text = str(index)
+    raw_w = len(text) * _DIGIT_W + (len(text) - 1) * _DIGIT_GAP
+    max_scale = max(1, min(inner_w // raw_w, inner_h // _DIGIT_H))
+    scale = max(1, max_scale // 2)
+    digits = _render_pixel_digits(text, scale)
+    dx = inner_l + (inner_w - digits.width) // 2
+    dy = inner_t + (inner_h - digits.height) // 2
+    img.paste(digits, (dx, dy), digits)
+    return img
+
 
 def rgb_to_hex(rgb):
     r, g, b = rgb
@@ -701,6 +761,7 @@ class CTMEngine:
         self.preview_tile = 0
         self.use_custom_outline = False
         self.show_guides = True
+        self.debug_tile_labels = False
         self.last_save_directory = load_last_save_directory()
         self.preview_pan_x = 0.0
         self.preview_pan_y = 0.0
@@ -865,6 +926,10 @@ class CTMEngine:
         tile_idx = max(0, min(46, int(self.preview_tile)))
         self.preview_tile = tile_idx
         preview_img = self.create_tile(CTM_RULES[tile_idx], tile_idx)
+        if self.debug_tile_labels:
+            preview_img = overlay_tile_index(
+                preview_img, tile_idx, self.border_width
+            )
 
         display_scale = PREVIEW_TEXEL_SCALE * self.zoom
         new_w = min(int(preview_img.width * display_scale), PREVIEW_MAX_PX)
@@ -1059,7 +1124,10 @@ class CTMEngine:
         out_path = os.path.join(save_dir, self.base_filename)
         os.makedirs(out_path, exist_ok=True)
         for i, rule in enumerate(CTM_RULES):
-            self.create_tile(rule, tile_idx=i).save(os.path.join(out_path, f"{i}.png"))
+            tile_img = self.create_tile(rule, tile_idx=i)
+            if self.debug_tile_labels:
+                tile_img = overlay_tile_index(tile_img, i, self.border_width)
+            tile_img.save(os.path.join(out_path, f"{i}.png"))
         with open(os.path.join(out_path, f"{self.base_filename}.properties"), "w") as f:
             f.write(f"matchTiles={self.base_filename}\n")
             f.write("method=ctm\n")
@@ -1224,6 +1292,12 @@ def main(page: ft.Page):
         active_color=C_ACCENT,
         inactive_thumb_color=C_MUTED,
         on_change=lambda e: on_guides_change(e),
+    )
+    debug_tile_ids_switch = ft.Switch(
+        value=False,
+        active_color=C_ACCENT,
+        inactive_thumb_color=C_MUTED,
+        on_change=lambda e: on_debug_tile_ids_change(e),
     )
     EXPORT_BTN_H = 38
     export_btn_style = ft.ButtonStyle(
@@ -2445,6 +2519,10 @@ def main(page: ft.Page):
         engine.show_guides = e.control.value
         refresh_preview()
 
+    def on_debug_tile_ids_change(e):
+        engine.debug_tile_labels = e.control.value
+        refresh_preview()
+
     def sync_border_mode_ui():
         color_active = not engine.use_custom_outline
         mode_color_tab.bgcolor = C_ACCENT if color_active else None
@@ -2938,6 +3016,12 @@ def main(page: ft.Page):
         size=11,
         color=C_MUTED,
     )
+    debug_tile_ids_label = ft.Text("Debug tile IDs", size=12, color=C_TEXT, expand=True)
+    debug_tile_ids_hint = ft.Text(
+        "Red ID on each tile — regenerate and reload the pack in-game",
+        size=11,
+        color=C_MUTED,
+    )
     pack_card = ft.Container(
         bgcolor=C_SURFACE,
         border_radius=10,
@@ -2952,6 +3036,14 @@ def main(page: ft.Page):
                     spacing=8,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
+                ft.Row(
+                    [
+                        debug_tile_ids_label,
+                        debug_tile_ids_switch,
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                debug_tile_ids_hint,
                 ft.Row(
                     [open_folder_btn, generate_btn],
                     spacing=8,
