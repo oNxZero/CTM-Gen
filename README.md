@@ -8,7 +8,9 @@ Python + [Flet](https://flet.dev) + Pillow. Everything lives in `main.py`.
 
 ## Guide video
 
-<video src="assets/guide.web.mp4" controls width="720"></video>
+[![Watch the guide on YouTube](https://img.youtube.com/vi/YOUR_VIDEO_ID/hqdefault.jpg)](https://www.youtube.com/watch?v=YOUR_VIDEO_ID)
+
+Replace `YOUR_VIDEO_ID` with the id from your YouTube URL (`youtube.com/watch?v=THIS_PART`).
 
 ## What it does
 
