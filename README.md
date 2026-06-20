@@ -1,103 +1,58 @@
-# 🧱 CTM Generator
+# CTM Generator
 
-> **Turn one Minecraft block texture into a full OptiFine CTM pack — 47 tiles, zero manual slicing.**
+Desktop tool for making OptiFine connected texture packs from a single block PNG. You load the texture, set up borders, preview the layout, and export tiles `0.png`–`46.png` plus the `.properties` file.
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)
-
-A desktop app for resource pack artists. Load a PNG, set up borders, preview the result live, and export everything OptiFine needs — tile images `0.png` through `46.png` plus the `.properties` file.
-
-Built with [Flet](https://flet.dev) and Pillow. One file (`main.py`), two dependencies, no build step.
-
----
-
-## 📸 Demo
+Python + [Flet](https://flet.dev) + Pillow. Everything lives in `main.py`.
 
 ![CTM Generator UI Demo](assets/demo.png)
 
-Drop your own screenshot in as `assets/demo.png` whenever you want to update this.
+## What it does
 
----
+- Slices one source image into all 47 standard CTM tiles
+- Live preview with zoom
+- Colored frame borders (width, alpha, color, eyedropper) or a custom frame PNG
+- Basic paint tools on the loaded texture — pick, brush, fill, undo/redo
+- Red guide lines for where borders get cut
+- **Debug tile IDs** — stamps each tile with its index in red so you can see what OptiFine picks in-game, then regenerate without debug when you're done
+- A handful of UI themes (Moonlight is the default; also Light, Dark, Obsidian, Catppuccin, Dracula, Nord)
 
-## 🔥 Features
-
-* **Instant CTM export:** Slices and assembles all 47 standard tiles from a single source image.
-* **Live preview:** See the full CTM layout before saving, with zoom for pixel-level work.
-* **Colored frame mode:** Procedural borders with adjustable width, alpha, and color — eyedropper included.
-* **Custom PNG mode:** Bring your own hand-drawn frame texture; the tool handles the slicing logic.
-* **Paint tools:** Pick, brush, and fill on the loaded texture, with undo/redo.
-* **Guide overlay:** Optional red lines show exactly where borders get cut.
-* **Debug tile IDs:** Optional export mode stamps each tile with its index (`0`–`46`) in bright red — load the pack in-game to see which CTM tile OptiFine picks on each face.
-* **Themes:** Moonlight, Light, Dark, Obsidian, Catppuccin, Dracula, and Nord — palettes adapted from [Moonlight](https://github.com/oNxZero/Moonlight).
-* **Inline status:** Save confirmations show next to the preview (`Saved to /path/to/pack`).
-
----
-
-## 🚀 Installation
+## Install
 
 ```bash
 git clone https://github.com/oNxZero/CTM-Gen.git
 cd CTM-Gen
-
 pip install -r requirements.txt
 python main.py
 ```
 
-Works the same on Linux and Windows — just use `python` instead of `python3` if that's what your system has.
+Linux and Windows. Use `python` or `python3` depending on what your system has.
 
----
+## Quick start
 
-## 📖 Usage
-
-### 1. Load a texture
-
-Click **Open texture** and pick your base block PNG.
-
-### 2. Choose a border mode
-
-* **Colored frame** — Set border color, width, and transparency. Use the eyedropper to sample from the preview.
-* **Custom PNG** — Load a separate image with only the frame (transparent center).
-
-### 3. Preview and tweak
-
-Zoom in, toggle **Show guide lines**, and use the paint toolbar if you need small fixes on the texture.
-
-### 4. Generate the pack
-
-Click **Generate pack**, pick an output folder, and the app creates a subfolder with all 47 tiles and the properties file.
-
-Turn on **Debug tile IDs** (in the Export panel) when troubleshooting CTM in-game. Each exported tile gets a small red pixel number centered inside the border area. Place blocks in Minecraft, note which numbers appear on broken faces, then turn debug off and regenerate a clean pack when you're done.
-
-### 5. Drop it in your resource pack
+1. **Open texture** — your base block PNG.
+2. Pick a border mode:
+   - **Colored frame** — procedural border; eyedropper samples from the preview.
+   - **Custom PNG** — separate image with just the frame (transparent center).
+3. Zoom, toggle guide lines, paint if something needs a touch-up.
+4. **Generate pack** — choose a folder; the app writes a subfolder with all tiles and the properties file.
+5. Copy the output into your resource pack:
 
 ```
 assets/minecraft/optifine/ctm/<your_texture_name>/
 ```
 
----
+If CTM looks wrong in-game, turn on **Debug tile IDs** in the Export panel, place blocks, note which numbers show up on bad faces, fix the source, turn debug off, and export again.
 
-## 🎨 Themes
+## Settings
 
-Switch themes from the **Appearance** panel in the sidebar. The default **Moonlight** palette comes from [oNxZero/Moonlight](https://github.com/oNxZero/Moonlight).
+Theme and last save folder are stored in `~/.config/ctm-generator/settings.json`.
 
-Settings (theme, last save folder) live in:
+Moonlight palette is from [oNxZero/Moonlight](https://github.com/oNxZero/Moonlight).
 
-```
-~/.config/ctm-generator/settings.json
-```
+## Credits
 
----
+Tile indexing idea from [Minecraft-Connected-Textures-Generator-CTM](https://github.com/Rostezkiy/Minecraft-Connected-Textures-Generator-CTM) by Rostezkiy. This repo is a rewrite — different UI, preview, paint tools, export flow.
 
-## 🤝 Credits
+## License
 
-* **[Minecraft-Connected-Textures-Generator-CTM](https://github.com/Rostezkiy/Minecraft-Connected-Textures-Generator-CTM)** by Rostezkiy — original CTM tile indexing concept.
-* **[Moonlight](https://github.com/oNxZero/Moonlight)** by oNxZero — theme palette inspiration.
-
-This is a full rewrite: new UI, preview engine, paint tools, and export flow.
-
----
-
-## 📜 License
-
-Distributed under the MIT License.
+MIT
