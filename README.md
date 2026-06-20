@@ -6,6 +6,12 @@ Python + [Flet](https://flet.dev) + Pillow. Everything lives in `main.py`.
 
 ![CTM Generator UI Demo](assets/demo.png)
 
+## Guide video
+
+Add your YouTube guide URL here when you upload it:
+
+https://www.youtube.com/watch?v=
+
 ## What it does
 
 - Slices one source image into all 47 standard CTM tiles
