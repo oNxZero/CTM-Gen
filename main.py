@@ -782,6 +782,8 @@ class CTMEngine:
     def tile_source(self, tile_idx):
         if self.base_image is None:
             return None
+        if self.apply_all_tiles:
+            return self.base_image
         return self.tile_bases.get(tile_idx, self.base_image)
 
     def edit_image(self):
@@ -1173,9 +1175,14 @@ def main(page: ft.Page):
     page.services.append(file_picker)
 
     _blank_png = pil_to_src(Image.new("RGBA", (1, 1), (0, 0, 0, 0)))
-    preview_image = ft.Image(src=_blank_png, fit=ft.BoxFit.NONE, gapless_playback=True)
-    preview_tile_box = ft.Container(content=preview_image, width=1, height=1)
-    preview_gesture = ft.GestureDetector(content=preview_tile_box)
+    preview_image = ft.Image(
+        src=_blank_png,
+        fit=ft.BoxFit.FILL,
+        gapless_playback=True,
+        expand=True,
+    )
+    preview_tile_box = ft.Container(content=preview_image, expand=True)
+    preview_gesture = ft.GestureDetector(content=preview_tile_box, expand=True)
     preview_title = ft.Text("Preview", size=14, weight=ft.FontWeight.W_600, color=C_TEXT)
     status_toast = ft.Text(
         "",
@@ -1188,6 +1195,7 @@ def main(page: ft.Page):
     preview_meta = ft.Text("", size=12, color=C_MUTED)
     toast_token = {"id": 0}
     preview_viewport = {"w": 800, "h": 600}
+    resize_token = {"id": 0}
 
     empty_state_icon = ft.Icon(ft.Icons.GRID_VIEW_ROUNDED, size=40, color=C_MUTED)
     empty_state_title = ft.Text(
@@ -1612,14 +1620,6 @@ def main(page: ft.Page):
 
         page.run_task(hide_toast)
 
-    def set_preview_tile_size(width, height):
-        width = max(1, int(width or 1))
-        height = max(1, int(height or 1))
-        preview_image.width = width
-        preview_image.height = height
-        preview_tile_box.width = width
-        preview_tile_box.height = height
-
     def push_draw_preview(force=False):
         if engine.base_image is None:
             return
@@ -1631,8 +1631,7 @@ def main(page: ft.Page):
             preview_viewport["w"], preview_viewport["h"], live=True
         )
         preview_image.src = pil_to_src(rendered, fast=True)
-        set_preview_tile_size(rendered.width, rendered.height)
-        page.update(preview_image, preview_tile_box)
+        page.update(preview_image)
 
     def refresh_preview():
         if engine.base_image is None:
@@ -1655,7 +1654,6 @@ def main(page: ft.Page):
             preview_viewport["w"], preview_viewport["h"]
         )
         preview_image.src = pil_to_src(rendered)
-        set_preview_tile_size(rendered.width, rendered.height)
         preview_title.value = "Preview"
         preview_meta.value = (
             f"Tile {tile_idx:02d} of 46  ·  "
@@ -1675,15 +1673,27 @@ def main(page: ft.Page):
 
 
     def on_preview_resize(e: ft.LayoutSizeChangeEvent):
-        preview_viewport["w"] = max(int(e.width or 800), 200)
-        preview_viewport["h"] = max(int(e.height or 600), 200)
-        if engine.base_image is not None:
+        w = max(int(e.width or 800), 200)
+        h = max(int(e.height or 600), 200)
+        if w == preview_viewport["w"] and h == preview_viewport["h"]:
+            return
+        preview_viewport["w"] = w
+        preview_viewport["h"] = h
+        resize_token["id"] += 1
+        token = resize_token["id"]
+
+        async def deferred(_=None):
+            await asyncio.sleep(0.05)
+            if resize_token["id"] != token or engine.base_image is None:
+                return
             cx, cy = preview_viewport["w"] / 2, preview_viewport["h"] / 2
             min_z, max_z = zoom_limits_for_texture()
             engine.apply_zoom_at(
                 engine.zoom, cx, cy, max_zoom=max_z, min_zoom=min_z
             )
             refresh_preview()
+
+        page.run_task(deferred)
 
     def on_hex_change(e):
         if syncing_hex["active"]:
@@ -2562,6 +2572,9 @@ def main(page: ft.Page):
 
     def on_apply_all_tiles_change(e):
         engine.apply_all_tiles = e.control.value
+        if engine.apply_all_tiles:
+            engine.clear_tile_bases()
+        refresh_preview()
 
     def sync_paint_tool_buttons():
         picking_frame = picking_color["active"] and picking_color["for"] == "border"
