@@ -8,9 +8,7 @@ Python + [Flet](https://flet.dev) + Pillow. Everything lives in `main.py`.
 
 ## Guide video
 
-Add your YouTube guide URL here when you upload it:
-
-https://www.youtube.com/watch?v=
+<video src="assets/guide.web.mp4" controls width="720"></video>
 
 ## What it does
 
