@@ -145,6 +145,8 @@ def _from_moonlight(theme_id, colors):
         "muted": colors["subtext"],
         "accent": colors["blue"],
         "accent_dim": colors["slider"],
+        "green": colors["green"],
+        "red": colors["red"],
         "snack_ok": colors["surface1"],
         "on_accent": "#ffffff",
     }
@@ -170,6 +172,8 @@ THEMES.update(
             "muted": "#666666",
             "accent": "#2563eb",
             "accent_dim": "#2563eb",
+            "green": "#16a34a",
+            "red": "#dc2626",
             "snack_ok": "#dbeafe",
             "on_accent": "#ffffff",
         },
@@ -186,6 +190,8 @@ THEMES.update(
             "muted": "#a3a3a3",
             "accent": "#60a5fa",
             "accent_dim": "#3b82f6",
+            "green": "#4ade80",
+            "red": "#f87171",
             "snack_ok": "#1e3a5f",
             "on_accent": "#ffffff",
         },
@@ -216,6 +222,139 @@ def iter_themes():
     for theme_id, meta in THEMES.items():
         if theme_id not in seen:
             yield theme_id, meta
+
+
+THEME_TILE_SIZE = 96
+THEME_GRID_GAP = 8
+THEME_GRID_COLS = 3
+
+
+def theme_grid_width():
+    return THEME_TILE_SIZE * THEME_GRID_COLS + THEME_GRID_GAP * (THEME_GRID_COLS - 1)
+
+
+def build_theme_tile_preview(meta):
+    accent = meta["accent"]
+    border = meta["border"]
+    panel = meta["panel"]
+    chip = meta.get("chip", meta["surface"])
+    bg = meta["bg"]
+    muted = meta["muted"]
+    text = meta["text"]
+
+    def preview_toggle(on):
+        return ft.Container(
+            width=14,
+            height=6,
+            border_radius=3,
+            bgcolor=accent if on else muted,
+            padding=1,
+            content=ft.Row(
+                [
+                    ft.Container(
+                        width=4,
+                        height=4,
+                        border_radius=2,
+                        bgcolor=text,
+                    )
+                ],
+                alignment=(
+                    ft.MainAxisAlignment.END if on else ft.MainAxisAlignment.START
+                ),
+            ),
+        )
+
+    return ft.Container(
+        expand=True,
+        border_radius=5,
+        bgcolor=bg,
+        border=ft.Border.all(1, border),
+        padding=4,
+        content=ft.Column(
+            [
+                ft.Container(height=7, border_radius=2, bgcolor=panel),
+                ft.Container(height=6, border_radius=2, bgcolor=chip),
+                ft.Row(
+                    [
+                        preview_toggle(False),
+                        ft.Container(expand=True),
+                        preview_toggle(True),
+                    ],
+                    spacing=0,
+                ),
+                ft.Stack(
+                    [
+                        ft.Container(height=3, border_radius=2, bgcolor=muted),
+                        ft.Container(width=16, height=3, border_radius=2, bgcolor=accent),
+                        ft.Container(
+                            left=13,
+                            top=-1,
+                            width=4,
+                            height=4,
+                            border_radius=2,
+                            bgcolor=text,
+                        ),
+                    ],
+                    height=5,
+                ),
+            ],
+            spacing=3,
+            expand=True,
+        ),
+    )
+
+
+def build_theme_card(meta, selected, on_pick):
+    accent = meta["accent"]
+    border = meta["border"]
+    card_bg = meta["chip"] if selected else meta["surface"]
+    swatches = ft.Row(
+        [
+            ft.Container(width=10, height=10, border_radius=2, bgcolor=meta["accent"]),
+            ft.Container(
+                width=10,
+                height=10,
+                border_radius=2,
+                bgcolor=meta.get("green", meta["accent"]),
+            ),
+            ft.Container(
+                width=10,
+                height=10,
+                border_radius=2,
+                bgcolor=meta.get("red", meta["muted"]),
+            ),
+        ],
+        spacing=3,
+        alignment=ft.MainAxisAlignment.CENTER,
+    )
+    return ft.Container(
+        width=THEME_TILE_SIZE,
+        height=THEME_TILE_SIZE,
+        border_radius=8,
+        bgcolor=card_bg,
+        border=ft.Border.all(2 if selected else 1, accent if selected else border),
+        padding=6,
+        ink=True,
+        on_click=on_pick,
+        content=ft.Column(
+            [
+                build_theme_tile_preview(meta),
+                ft.Text(
+                    meta["name"],
+                    size=11,
+                    weight=ft.FontWeight.W_600,
+                    color=meta["text"],
+                    text_align=ft.TextAlign.CENTER,
+                    max_lines=1,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                ),
+                swatches,
+            ],
+            spacing=4,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True,
+        ),
+    )
 
 
 ROOT = Path(__file__).resolve().parent
@@ -1324,6 +1463,14 @@ def main(page: ft.Page):
         padding=ft.Padding(left=10, right=10),
         text_style=ft.TextStyle(size=12),
     )
+    new_texture_btn = ft.OutlinedButton(
+        "New texture",
+        icon=ft.Icons.ADD_PHOTO_ALTERNATE_OUTLINED,
+        height=EXPORT_BTN_H,
+        expand=True,
+        style=export_btn_style,
+        on_click=lambda e: page.run_task(pick_texture),
+    )
     generate_btn = ft.FilledButton(
         "Generate pack",
         height=EXPORT_BTN_H,
@@ -1331,13 +1478,6 @@ def main(page: ft.Page):
         disabled=True,
         style=export_btn_style,
         on_click=lambda e: page.run_task(generate_pack),
-    )
-    open_folder_btn = ft.OutlinedButton(
-        "Open folder",
-        height=EXPORT_BTN_H,
-        expand=True,
-        style=export_btn_style,
-        on_click=lambda e: page.run_task(open_save_folder),
     )
 
     frame_color_btn = ft.IconButton(
@@ -1720,9 +1860,12 @@ def main(page: ft.Page):
                 f"{alpha:02X}" if alpha is not None else ""
             )
             syncing_hex["active"] = False
-            color_swatch.bgcolor = hex_value
+            color_swatch.bgcolor = ft.Colors.with_opacity(
+                int(engine.brush_alpha) / 255, hex_value
+            )
             if alpha is not None:
                 engine.brush_alpha = alpha
+            safe_page_update(color_swatch, hex_field)
             refresh_preview()
         except ValueError:
             pass
@@ -1750,12 +1893,17 @@ def main(page: ft.Page):
                 f"{alpha:02X}" if alpha is not None else ""
             )
             syncing_border_hex["active"] = False
-            outline_swatch.bgcolor = hex_value
+            outline_swatch.bgcolor = ft.Colors.with_opacity(
+                int(engine.border_alpha) / 255, hex_value
+            )
             if alpha is not None:
                 engine.border_alpha = alpha
                 alpha_slider.value = alpha
                 alpha_value.value = str(int(alpha))
             engine.invalidate_border_cache()
+            safe_page_update(
+                outline_swatch, border_hex_field, alpha_slider, alpha_value
+            )
             refresh_preview()
         except ValueError:
             pass
@@ -1765,20 +1913,24 @@ def main(page: ft.Page):
         syncing_hex["active"] = True
         hex_field.value = hex_value[1:].upper()
         syncing_hex["active"] = False
-        color_swatch.bgcolor = hex_value
+        a = int(alpha if alpha is not None else engine.brush_alpha)
+        color_swatch.bgcolor = ft.Colors.with_opacity(a / 255, hex_value)
         if alpha is not None:
             engine.brush_alpha = alpha
         edit_history["applying"] = False
+        safe_page_update(color_swatch, hex_field)
 
     def apply_border_color(hex_value, alpha=None):
         syncing_border_hex["active"] = True
         border_hex_field.value = hex_value[1:].upper()
         syncing_border_hex["active"] = False
-        outline_swatch.bgcolor = hex_value
+        a = int(alpha if alpha is not None else engine.border_alpha)
+        outline_swatch.bgcolor = ft.Colors.with_opacity(a / 255, hex_value)
         if alpha is not None:
             alpha_slider.value = alpha
             alpha_value.value = str(int(alpha))
             engine.border_alpha = alpha
+        safe_page_update(outline_swatch, border_hex_field, alpha_slider, alpha_value)
 
     def apply_sampled_color(hex_raw, target):
         rgb, alpha = parse_hex_color(hex_raw)
@@ -1824,10 +1976,14 @@ def main(page: ft.Page):
             edit_history["undo"].pop(0)
         sync_history_buttons()
 
-    def _snapshot_image_for_undo():
-        if engine.apply_all_tiles:
-            return {"kind": "image", "scope": "all", "before": engine.base_image.copy()}
-        idx = engine.preview_tile
+    def _capture_image_state(scope, tile_idx=None):
+        if scope == "all":
+            return {
+                "kind": "image",
+                "scope": "all",
+                "before": engine.base_image.copy(),
+            }
+        idx = tile_idx if tile_idx is not None else engine.preview_tile
         before = engine.tile_bases[idx].copy() if idx in engine.tile_bases else None
         return {"kind": "image", "scope": "tile", "tile": idx, "before": before}
 
@@ -1840,6 +1996,7 @@ def main(page: ft.Page):
                 engine.tile_bases[idx] = entry["before"].copy()
         else:
             engine.base_image = entry["before"].copy()
+            engine.clear_tile_bases()
 
     def _color_snapshot(target):
         if target == "border":
@@ -1878,8 +2035,12 @@ def main(page: ft.Page):
         entry = edit_history["undo"].pop()
         edit_history["applying"] = True
         if entry["kind"] == "image" and engine.base_image is not None:
-            edit_history["redo"].append(_snapshot_image_for_undo())
+            edit_history["redo"].append(
+                _capture_image_state(entry.get("scope"), entry.get("tile"))
+            )
             _restore_image_undo(entry)
+            if entry.get("scope") == "tile" and entry.get("tile") is not None:
+                engine.preview_tile = entry["tile"]
             refresh_preview()
             set_status("Undid draw stroke")
         elif entry["kind"] == "color":
@@ -1908,8 +2069,12 @@ def main(page: ft.Page):
         entry = edit_history["redo"].pop()
         edit_history["applying"] = True
         if entry["kind"] == "image" and engine.base_image is not None:
-            edit_history["undo"].append(_snapshot_image_for_undo())
+            edit_history["undo"].append(
+                _capture_image_state(entry.get("scope"), entry.get("tile"))
+            )
             _restore_image_undo(entry)
+            if entry.get("scope") == "tile" and entry.get("tile") is not None:
+                engine.preview_tile = entry["tile"]
             refresh_preview()
             set_status("Redid draw stroke")
         elif entry["kind"] == "color":
@@ -2390,6 +2555,11 @@ def main(page: ft.Page):
         engine.border_alpha = int(e.control.value)
         engine.invalidate_border_cache()
         alpha_value.value = str(engine.border_alpha)
+        outline_swatch.bgcolor = ft.Colors.with_opacity(
+            engine.border_alpha / 255,
+            rgb_to_hex(engine.border_color),
+        )
+        safe_page_update(outline_swatch, alpha_value)
         refresh_preview()
 
     alpha_slider.on_change_start = lambda e: push_undo_color("border")
@@ -2844,8 +3014,14 @@ def main(page: ft.Page):
         sync_border_ui()
         alpha_slider.value = engine.border_alpha
         alpha_value.value = str(engine.border_alpha)
-        outline_swatch.bgcolor = rgb_to_hex(engine.border_color)
-        color_swatch.bgcolor = rgb_to_hex(engine.brush_color)
+        outline_swatch.bgcolor = ft.Colors.with_opacity(
+            int(engine.border_alpha) / 255,
+            rgb_to_hex(engine.border_color),
+        )
+        color_swatch.bgcolor = ft.Colors.with_opacity(
+            int(engine.brush_alpha) / 255,
+            rgb_to_hex(engine.brush_color),
+        )
         border_hex_field.value = rgb_to_hex(engine.border_color)[1:].upper()
         hex_field.value = rgb_to_hex(engine.brush_color)[1:].upper()
         generate_btn.disabled = False
@@ -2853,7 +3029,17 @@ def main(page: ft.Page):
         reset_preview_zoom()
         refresh_preview()
         sync_preview_gestures()
-        page.update(generate_btn, border_slider, border_value, alpha_slider, alpha_value)
+        safe_page_update(
+            outline_swatch,
+            color_swatch,
+            border_hex_field,
+            hex_field,
+            generate_btn,
+            border_slider,
+            border_value,
+            alpha_slider,
+            alpha_value,
+        )
         page.run_task(remeasure_preview)
 
     async def remeasure_preview(_=None):
@@ -3066,7 +3252,7 @@ def main(page: ft.Page):
                 ),
                 debug_tile_ids_hint,
                 ft.Row(
-                    [open_folder_btn, generate_btn],
+                    [new_texture_btn, generate_btn],
                     spacing=8,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
@@ -3259,7 +3445,7 @@ def main(page: ft.Page):
             page.update()
 
     def show_theme_dialog(_=None):
-        tiles = []
+        cards = []
         for tid, meta in iter_themes():
             selected = tid == theme_id
 
@@ -3267,90 +3453,38 @@ def main(page: ft.Page):
                 apply_theme_to_ui(picked)
                 page.pop_dialog()
 
-            tiles.append(
-                ft.Container(
-                    width=148,
-                    padding=ft.Padding(left=10, right=10, top=10, bottom=10),
-                    border_radius=10,
-                    bgcolor=meta["surface"],
-                    border=ft.Border.all(
-                        2, meta["accent"] if selected else meta["border"]
-                    ),
-                    ink=True,
-                    on_click=pick_theme,
-                    content=ft.Column(
-                        [
-                            ft.Row(
-                                [
-                                    ft.Container(
-                                        width=18,
-                                        height=18,
-                                        border_radius=4,
-                                        bgcolor=meta["accent"],
-                                    ),
-                                    ft.Container(
-                                        width=18,
-                                        height=18,
-                                        border_radius=4,
-                                        bgcolor=meta["surface"],
-                                        border=ft.Border.all(1, meta["border"]),
-                                    ),
-                                    ft.Container(
-                                        width=18,
-                                        height=18,
-                                        border_radius=4,
-                                        bgcolor=meta["bg"],
-                                    ),
-                                ],
-                                spacing=4,
-                                tight=True,
-                            ),
-                            ft.Text(
-                                meta["name"],
-                                size=13,
-                                weight=ft.FontWeight.W_600,
-                                color=meta["text"],
-                            ),
-                            ft.Text(
-                                meta["description"],
-                                size=11,
-                                color=meta["muted"],
-                            ),
-                        ],
-                        spacing=6,
-                        tight=True,
-                    ),
-                )
-            )
+            cards.append(build_theme_card(meta, selected, pick_theme))
+
         page.show_dialog(
             ft.AlertDialog(
                 modal=True,
                 bgcolor=C_SURFACE,
                 shape=ft.RoundedRectangleBorder(radius=16),
                 title=ft.Text(
-                    "Appearance",
+                    "Themes",
                     size=18,
                     weight=ft.FontWeight.W_600,
                     color=C_TEXT,
                 ),
                 content=ft.Container(
-                    width=500,
+                    width=theme_grid_width(),
                     content=ft.Column(
-                        [
+                        tight=True,
+                        spacing=10,
+                        controls=[
                             ft.Text(
-                                "Pick a color theme for the app.",
-                                size=12,
+                                "Click a theme to recolor the app",
+                                size=11,
                                 color=C_MUTED,
                             ),
                             ft.Row(
-                                tiles,
+                                cards,
                                 wrap=True,
-                                spacing=8,
-                                run_spacing=8,
+                                spacing=THEME_GRID_GAP,
+                                run_spacing=THEME_GRID_GAP,
+                                width=theme_grid_width(),
                             ),
                         ],
-                        spacing=12,
-                        scroll=ft.ScrollMode.AUTO,
                     ),
                 ),
                 actions=[
