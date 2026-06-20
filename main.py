@@ -960,27 +960,10 @@ class CTMEngine:
                 width=line_w,
             )
 
-        x = int(round(self.preview_pan_x))
-        y = int(round(self.preview_pan_y))
-        self.preview_offset_x = x
-        self.preview_offset_y = y
         self.preview_scale = new_w / preview_img.width if preview_img.width else 1.0
         self.preview_display_w = new_w
         self.preview_display_h = new_h
-
-        canvas = Image.new("RGBA", (viewport_w, viewport_h), (0, 0, 0, 0))
-        src_x0 = max(0, -x)
-        src_y0 = max(0, -y)
-        dst_x0 = max(0, x)
-        dst_y0 = max(0, y)
-        copy_w = min(new_w - src_x0, viewport_w - dst_x0)
-        copy_h = min(new_h - src_y0, viewport_h - dst_y0)
-        if copy_w > 0 and copy_h > 0:
-            region = preview_resized.crop(
-                (src_x0, src_y0, src_x0 + copy_w, src_y0 + copy_h)
-            )
-            canvas.paste(region, (dst_x0, dst_y0))
-        return canvas, tile_idx
+        return preview_resized, tile_idx
 
     def begin_draw(self):
         target = self.edit_image()
@@ -1179,10 +1162,16 @@ def main(page: ft.Page):
         src=_blank_png,
         fit=ft.BoxFit.FILL,
         gapless_playback=True,
-        expand=True,
     )
-    preview_tile_box = ft.Container(content=preview_image, expand=True)
-    preview_gesture = ft.GestureDetector(content=preview_tile_box, expand=True)
+    preview_tile_layer = ft.Container(
+        content=preview_image,
+        left=0,
+        top=0,
+        width=1,
+        height=1,
+    )
+    preview_stack = ft.Stack(controls=[preview_tile_layer], expand=True)
+    preview_gesture = ft.GestureDetector(content=preview_stack, expand=True)
     preview_title = ft.Text("Preview", size=14, weight=ft.FontWeight.W_600, color=C_TEXT)
     status_toast = ft.Text(
         "",
@@ -1195,7 +1184,6 @@ def main(page: ft.Page):
     preview_meta = ft.Text("", size=12, color=C_MUTED)
     toast_token = {"id": 0}
     preview_viewport = {"w": 800, "h": 600}
-    resize_token = {"id": 0}
     preview_has_texture = {"active": False}
 
     def safe_page_update(*controls):
@@ -1204,13 +1192,20 @@ def main(page: ft.Page):
         except RuntimeError:
             pass
 
+    def sync_preview_tile_layer():
+        preview_tile_layer.left = int(round(engine.preview_pan_x))
+        preview_tile_layer.top = int(round(engine.preview_pan_y))
+        preview_tile_layer.width = max(1, int(engine.preview_display_w))
+        preview_tile_layer.height = max(1, int(engine.preview_display_h))
+
     def repaint_preview(live=False):
         if engine.base_image is None:
             return None
-        rendered, tile_idx = engine.render_preview(
+        tile_img, tile_idx = engine.render_preview(
             preview_viewport["w"], preview_viewport["h"], live=live
         )
-        preview_image.src = pil_to_src(rendered, fast=live)
+        preview_image.src = pil_to_src(tile_img, fast=live)
+        sync_preview_tile_layer()
         return tile_idx
 
     empty_state_icon = ft.Icon(ft.Icons.GRID_VIEW_ROUNDED, size=40, color=C_MUTED)
@@ -1644,7 +1639,7 @@ def main(page: ft.Page):
             return
         draw_update_clock["t"] = now
         repaint_preview(live=True)
-        safe_page_update(preview_image)
+        safe_page_update(preview_image, preview_tile_layer)
 
     def refresh_preview():
         if engine.base_image is None:
@@ -1681,6 +1676,7 @@ def main(page: ft.Page):
         tile_value.value = f"{tile_idx:02d} / 46"
         controls = [
             preview_image,
+            preview_tile_layer,
             preview_meta,
             preview_title,
             tile_value,
@@ -1694,27 +1690,15 @@ def main(page: ft.Page):
     def on_preview_resize(e: ft.LayoutSizeChangeEvent):
         w = max(int(e.width or 800), 200)
         h = max(int(e.height or 600), 200)
-        old_w, old_h = preview_viewport["w"], preview_viewport["h"]
-        if w == old_w and h == old_h:
+        if w == preview_viewport["w"] and h == preview_viewport["h"]:
             return
-        if engine.base_image is not None:
-            engine.preview_pan_x += (w - old_w) / 2
-            engine.preview_pan_y += (h - old_h) / 2
         preview_viewport["w"] = w
         preview_viewport["h"] = h
         if engine.base_image is None:
             return
-        resize_token["id"] += 1
-        token = resize_token["id"]
-
-        async def deferred(_=None):
-            await asyncio.sleep(0.12)
-            if resize_token["id"] != token:
-                return
-            repaint_preview()
-            safe_page_update(preview_image)
-
-        page.run_task(deferred)
+        engine.center_view(w, h)
+        repaint_preview()
+        safe_page_update(preview_image, preview_tile_layer)
 
     def on_hex_change(e):
         if syncing_hex["active"]:
@@ -2491,11 +2475,8 @@ def main(page: ft.Page):
             if now - zoom_update_clock["t"] < 0.04:
                 return
             zoom_update_clock["t"] = now
-        rendered, _ = engine.render_preview(
-            preview_viewport["w"], preview_viewport["h"], live=live
-        )
-        preview_image.src = pil_to_src(rendered, fast=live)
-        safe_page_update(preview_image)
+        repaint_preview(live=live)
+        safe_page_update(preview_image, preview_tile_layer)
 
     def schedule_zoom_finalize():
         zoom_finalize_token["id"] += 1
@@ -2876,10 +2857,12 @@ def main(page: ft.Page):
         page.run_task(remeasure_preview)
 
     async def remeasure_preview(_=None):
-        await asyncio.sleep(0.12)
-        if engine.base_image is not None:
-            repaint_preview()
-            safe_page_update(preview_image)
+        await asyncio.sleep(0.05)
+        if engine.base_image is None:
+            return
+        engine.center_view(preview_viewport["w"], preview_viewport["h"])
+        repaint_preview()
+        safe_page_update(preview_image, preview_tile_layer)
 
     def load_outline_path(path):
         try:
