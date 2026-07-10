@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -367,14 +368,136 @@ PREVIEW_MAX_PX = 2048
 ZOOM_MIN = 0.25
 ZOOM_MAX = 4.0
 ZOOM_STEP = 0.1
+ZOOM_STEP_FINE = 0.01
 DEFAULT_PREVIEW_ZOOM = 0.5
+ZOOM_SLIDER_DIVISIONS = 240
+ZOOM_PERCENT_MIN = 50
+ZOOM_PERCENT_MAX = 500
+ZOOM_PERCENT_FIT = 100
+ZOOM_SCROLL_STEP = 5
+BORDER_WIDTH_UI_MAX = 16
+
+_CTRL_KEYS = frozenset({"control left", "control right"})
 
 
-def snap_zoom(value, max_zoom=None, min_zoom=None):
+def _is_ctrl_key(key: str) -> bool:
+    return (key or "").strip().lower() in _CTRL_KEYS
+
+
+def scroll_wheel_zooms_in(delta_y: float) -> bool:
+    if platform.system() == "Windows":
+        return delta_y > 0
+    return delta_y < 0
+
+
+def sanitize_viewport_dim(value, default=600):
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(size) or size <= 0:
+        return default
+    return max(200, min(int(size), 8192))
+
+
+def prefer_flet_ctrl_fallback() -> bool:
+    return bool(os.environ.get("WAYLAND_DISPLAY"))
+
+
+class CtrlTracker:
+    def __init__(self):
+        self.pressed = False
+        self._listener = None
+        self.use_flet_fallback = False
+        self._flet_refs = 0
+
+    def start(self):
+        if prefer_flet_ctrl_fallback():
+            self.use_flet_fallback = True
+            return
+        if self._start_pynput():
+            return
+        self.use_flet_fallback = True
+
+    def _start_pynput(self) -> bool:
+        try:
+            from pynput.keyboard import Key, Listener
+
+            ctrl_keys = {Key.ctrl_l, Key.ctrl_r}
+
+            def on_press(key):
+                if key in ctrl_keys:
+                    self.pressed = True
+
+            def on_release(key):
+                if key in ctrl_keys:
+                    self.pressed = False
+
+            self._listener = Listener(on_press=on_press, on_release=on_release)
+            self._listener.daemon = True
+            self._listener.start()
+            return True
+        except Exception:
+            self._listener = None
+            return False
+
+    def on_flet_key_down(self, e: ft.KeyDownEvent):
+        if not self.use_flet_fallback:
+            return
+        if _is_ctrl_key(e.key):
+            self._flet_refs += 1
+            self.pressed = True
+
+    def on_flet_key_up(self, e: ft.KeyUpEvent):
+        if not self.use_flet_fallback:
+            return
+        if _is_ctrl_key(e.key):
+            self._flet_refs = max(0, self._flet_refs - 1)
+            self.pressed = self._flet_refs > 0
+
+    def on_flet_keyboard(self, e: ft.KeyboardEvent):
+        if not self.use_flet_fallback:
+            return
+        if _is_ctrl_key(e.key) or e.ctrl:
+            self.pressed = True
+
+
+def zoom_step_for_span(span):
+    span = max(float(span), 0.0)
+    if span <= 0.2:
+        return ZOOM_STEP_FINE
+    if span <= 0.75:
+        return 0.02
+    if span <= 2.0:
+        return 0.05
+    return ZOOM_STEP
+
+
+def snap_zoom(value, max_zoom=None, min_zoom=None, step=None):
     min_z = min_zoom if min_zoom is not None else ZOOM_MIN
     cap = max_zoom if max_zoom is not None else ZOOM_MAX
-    stepped = round(round(value / ZOOM_STEP) * ZOOM_STEP, 1)
+    if step is None:
+        step = zoom_step_for_span(cap - min_z)
+    stepped = round(round(value / step) * step, 3)
     return max(min_z, min(cap, stepped))
+
+
+def clamp_zoom(value, max_zoom=None, min_zoom=None):
+    min_z = min_zoom if min_zoom is not None else ZOOM_MIN
+    cap = max_zoom if max_zoom is not None else ZOOM_MAX
+    return max(min_z, min(cap, float(value)))
+
+
+def format_zoom_value(value, fit_zoom, min_zoom=None, max_zoom=None, step=None):
+    min_z = min_zoom if min_zoom is not None else ZOOM_MIN
+    cap = max_zoom if max_zoom is not None else ZOOM_MAX
+    zoom = snap_zoom(value, cap, min_z, step)
+    if fit_zoom > 0:
+        return f"{zoom / fit_zoom * 100:.0f}%"
+    if zoom < 1:
+        return f"{zoom:.2f}×"
+    return f"{zoom:.1f}×"
+
 
 # Design tokens (updated by theme)
 C_BG = "#0f1117"
@@ -433,6 +556,39 @@ def color_chip_row(swatch, hex_field, trailing=None):
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
     )
+
+
+SLIDER_VALUE_W = 44
+
+
+def slider_value_field(value, *, suffix=None, on_submit=None, on_blur=None, on_focus=None):
+    return ft.TextField(
+        value=str(value),
+        width=SLIDER_VALUE_W + (10 if suffix else 0),
+        height=28,
+        text_size=12,
+        border_radius=4,
+        bgcolor=C_SURFACE,
+        border_color=C_BORDER,
+        focused_border_color=C_ACCENT,
+        content_padding=ft.Padding(left=4, right=4),
+        text_align=ft.TextAlign.RIGHT,
+        keyboard_type=ft.KeyboardType.NUMBER,
+        suffix=ft.Text(suffix, size=12, color=C_MUTED) if suffix else None,
+        on_submit=on_submit,
+        on_blur=on_blur,
+        on_focus=on_focus,
+    )
+
+
+def border_slider_divisions(max_width):
+    max_width = int(max_width)
+    if max_width <= 0:
+        return None
+    if max_width <= 48:
+        return max_width
+    return None
+
 
 PRESET_COLORS = [
     "#000000", "#FFFFFF", "#9CA3AF", "#6B7280", "#EF4444", "#F97316",
@@ -540,7 +696,8 @@ def overlay_tile_index(image, index, border_width=0):
     inner_h = max(1, inner_b - inner_t)
 
     text = str(index)
-    raw_w = len(text) * _DIGIT_W + (len(text) - 1) * _DIGIT_GAP
+    label_digits = 2
+    raw_w = label_digits * _DIGIT_W + (label_digits - 1) * _DIGIT_GAP
     max_scale = max(1, min(inner_w // raw_w, inner_h // _DIGIT_H))
     scale = max(1, max_scale // 2)
     digits = _render_pixel_digits(text, scale)
@@ -904,6 +1061,8 @@ class CTMEngine:
         self.last_save_directory = load_last_save_directory()
         self.preview_pan_x = 0.0
         self.preview_pan_y = 0.0
+        self.preview_viewport_w = 800
+        self.preview_viewport_h = 600
         self.preview_offset_x = 0
         self.preview_offset_y = 0
         self.preview_scale = 1.0
@@ -939,40 +1098,65 @@ class CTMEngine:
         self._border_layer_cache = None
         self._border_cache_key = None
 
-    def display_scale(self):
-        return PREVIEW_TEXEL_SCALE * self.zoom
+    def set_preview_viewport(self, width, height):
+        self.preview_viewport_w = max(int(width), 200)
+        self.preview_viewport_h = max(int(height), 200)
 
-    def tile_display_size(self):
-        if not self.base_image:
-            return 0, 0
-        w, h = self.base_image.size
-        scale = self.display_scale()
+    def preview_origin(self, display_w=None, display_h=None):
+        if display_w is None:
+            display_w = self.preview_display_w or self.tile_display_size()[0]
+        if display_h is None:
+            display_h = self.preview_display_h or self.tile_display_size()[1]
         return (
-            min(int(w * scale), PREVIEW_MAX_PX),
-            min(int(h * scale), PREVIEW_MAX_PX),
+            (self.preview_viewport_w - display_w) / 2 + self.preview_pan_x,
+            (self.preview_viewport_h - display_h) / 2 + self.preview_pan_y,
         )
 
-    def center_view(self, viewport_w, viewport_h):
-        dw, dh = self.tile_display_size()
-        self.preview_pan_x = (viewport_w - dw) / 2
-        self.preview_pan_y = (viewport_h - dh) / 2
+    def display_scale(self, zoom=None):
+        zoom = self.zoom if zoom is None else zoom
+        return PREVIEW_TEXEL_SCALE * zoom
+
+    def preview_display_metrics(self, zoom=None):
+        if not self.base_image:
+            return 0, 0, 1.0
+        zoom = self.zoom if zoom is None else zoom
+        tex_w, tex_h = self.base_image.size
+        scale = self.display_scale(zoom)
+        display_w = min(int(tex_w * scale), PREVIEW_MAX_PX)
+        display_h = min(int(tex_h * scale), PREVIEW_MAX_PX)
+        layout_scale = display_w / tex_w if tex_w else 1.0
+        return display_w, display_h, layout_scale
+
+    def tile_display_size(self, zoom=None):
+        dw, dh, _ = self.preview_display_metrics(zoom)
+        return dw, dh
+
+    def center_view(self, viewport_w=None, viewport_h=None):
+        if viewport_w is not None and viewport_h is not None:
+            self.set_preview_viewport(viewport_w, viewport_h)
+        self.preview_pan_x = 0.0
+        self.preview_pan_y = 0.0
 
     def apply_zoom_at(self, new_zoom, focal_x, focal_y, max_zoom=None, min_zoom=None):
         if not self.base_image:
             return
         tex_w, tex_h = self.base_image.size
-        new_zoom = snap_zoom(new_zoom, max_zoom, min_zoom)
-        old_scale = self.display_scale()
+        old_zoom = self.zoom
+        new_zoom = clamp_zoom(new_zoom, max_zoom, min_zoom)
+        old_dw, old_dh, old_scale = self.preview_display_metrics(old_zoom)
+        old_ox, old_oy = self.preview_origin(old_dw, old_dh)
         if old_scale > 0:
-            tex_x = (focal_x - self.preview_pan_x) / old_scale
-            tex_y = (focal_y - self.preview_pan_y) / old_scale
+            tex_x = (focal_x - old_ox) / old_scale
+            tex_y = (focal_y - old_oy) / old_scale
         else:
             tex_x = tex_w / 2
             tex_y = tex_h / 2
         self.zoom = new_zoom
-        new_scale = self.display_scale()
-        self.preview_pan_x = focal_x - tex_x * new_scale
-        self.preview_pan_y = focal_y - tex_y * new_scale
+        new_dw, new_dh, new_scale = self.preview_display_metrics(new_zoom)
+        new_ox = focal_x - tex_x * new_scale
+        new_oy = focal_y - tex_y * new_scale
+        self.preview_pan_x = new_ox - (self.preview_viewport_w - new_dw) / 2
+        self.preview_pan_y = new_oy - (self.preview_viewport_h - new_dh) / 2
 
     def _border_settings_key(self):
         return (
@@ -983,10 +1167,26 @@ class CTMEngine:
             id(self.custom_outline_image) if self.custom_outline_image else None,
         )
 
+    def max_border_width(self):
+        if not self.base_image:
+            return BORDER_WIDTH_UI_MAX
+        w, h = self.base_image.size
+        return max(0, (min(w, h) - 1) // 2)
+
+    def ui_border_width_max(self):
+        if not self.base_image:
+            return BORDER_WIDTH_UI_MAX
+        return min(BORDER_WIDTH_UI_MAX, self.max_border_width())
+
+    def _effective_border_width(self):
+        return min(int(self.border_width), self.max_border_width())
+
     def _build_border_layer(self, rule, src_border):
         w, h = self.base_image.size
-        bw = int(self.border_width)
+        bw = self._effective_border_width()
         border_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        if bw <= 0:
+            return border_layer
         c_tl, c_tr, c_bl, c_br, e_t, e_r, e_b, e_l = rule
 
         def paste(piece, box):
@@ -1115,13 +1315,14 @@ class CTMEngine:
     def local_to_pixel_float(self, local_x, local_y):
         if self.base_image is None:
             return None
-        fx = (local_x - self.preview_pan_x) / self.preview_scale
-        fy = (local_y - self.preview_pan_y) / self.preview_scale
+        origin_x, origin_y = self.preview_origin()
+        fx = (local_x - origin_x) / self.preview_scale
+        fy = (local_y - origin_y) / self.preview_scale
         if (
-            local_x < self.preview_pan_x
-            or local_y < self.preview_pan_y
-            or local_x >= self.preview_pan_x + self.preview_display_w
-            or local_y >= self.preview_pan_y + self.preview_display_h
+            local_x < origin_x
+            or local_y < origin_y
+            or local_x >= origin_x + self.preview_display_w
+            or local_y >= origin_y + self.preview_display_h
         ):
             return None
         w, h = self.base_image.size
@@ -1277,6 +1478,21 @@ def main(page: ft.Page):
     zoom_update_clock = {"t": 0.0}
     zoom_finalize_token = {"id": 0}
     syncing_zoom = {"active": False}
+    syncing_border_value = {"active": False}
+    syncing_alpha_value = {"active": False}
+    ctrl_tracker = CtrlTracker()
+    ctrl_tracker.start()
+    preview_keyboard_listener = {"control": None}
+    text_input_focus = {"depth": 0}
+
+    def on_text_focus_in(_):
+        text_input_focus["depth"] += 1
+
+    def on_text_focus_out(_):
+        text_input_focus["depth"] = max(0, text_input_focus["depth"] - 1)
+
+    def text_field_shortcuts_blocked():
+        return text_input_focus["depth"] > 0
 
     page.title = "CTM Generator"
     page.padding = 0
@@ -1310,7 +1526,11 @@ def main(page: ft.Page):
         height=1,
     )
     preview_stack = ft.Stack(controls=[preview_tile_layer], expand=True)
-    preview_gesture = ft.GestureDetector(content=preview_stack, expand=True)
+    preview_gesture = ft.GestureDetector(
+        content=preview_stack,
+        expand=True,
+        on_scroll=lambda e: None,
+    )
     preview_title = ft.Text("Preview", size=14, weight=ft.FontWeight.W_600, color=C_TEXT)
     status_toast = ft.Text(
         "",
@@ -1324,6 +1544,7 @@ def main(page: ft.Page):
     toast_token = {"id": 0}
     preview_viewport = {"w": 800, "h": 600}
     preview_has_texture = {"active": False}
+    preview_camera_pan = {"active": False}
 
     def safe_page_update(*controls):
         try:
@@ -1332,10 +1553,19 @@ def main(page: ft.Page):
             pass
 
     def sync_preview_tile_layer():
-        preview_tile_layer.left = int(round(engine.preview_pan_x))
-        preview_tile_layer.top = int(round(engine.preview_pan_y))
+        origin_x, origin_y = engine.preview_origin()
+        preview_tile_layer.left = int(round(origin_x))
+        preview_tile_layer.top = int(round(origin_y))
         preview_tile_layer.width = max(1, int(engine.preview_display_w))
         preview_tile_layer.height = max(1, int(engine.preview_display_h))
+
+    def center_preview_in_viewport():
+        if engine.base_image is None:
+            return
+        engine.set_preview_viewport(preview_viewport["w"], preview_viewport["h"])
+        repaint_preview()
+        engine.center_view()
+        sync_preview_tile_layer()
 
     def repaint_preview(live=False):
         if engine.base_image is None:
@@ -1374,10 +1604,11 @@ def main(page: ft.Page):
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         spacing=8,
         alignment=ft.MainAxisAlignment.CENTER,
+        expand=True,
     )
-    border_value = ft.Text("1 px", size=12, color=C_MUTED)
-    alpha_value = ft.Text("255", size=12, color=C_MUTED)
-    zoom_value = ft.Text("0.5×", size=12, color=C_MUTED)
+    border_value = slider_value_field("1", suffix="px")
+    alpha_value = slider_value_field("255")
+    zoom_value = ft.Text("100%", size=12, color=C_MUTED)
     tile_value = ft.Text("00 / 46", size=13, weight=ft.FontWeight.W_500, color=C_TEXT)
     hex_prefix = ft.Text("#", color=C_MUTED)
     hex_field = ft.TextField(
@@ -1392,6 +1623,8 @@ def main(page: ft.Page):
         focused_border_color=C_ACCENT,
         content_padding=ft.Padding(left=6, right=6),
         on_change=lambda e: on_hex_change(e),
+        on_focus=on_text_focus_in,
+        on_blur=on_text_focus_out,
     )
     border_hex_prefix = ft.Text("#", color=C_MUTED)
     border_hex_field = ft.TextField(
@@ -1406,6 +1639,8 @@ def main(page: ft.Page):
         focused_border_color=C_ACCENT,
         content_padding=ft.Padding(left=6, right=6),
         on_change=lambda e: on_border_hex_change(e),
+        on_focus=on_text_focus_in,
+        on_blur=on_text_focus_out,
     )
     color_swatch = ft.Container(
         width=CHIP_SWATCH,
@@ -1560,10 +1795,10 @@ def main(page: ft.Page):
         ],
     )
     zoom_slider = ft.Slider(
-        min=ZOOM_MIN,
-        max=ZOOM_MAX,
-        divisions=int((ZOOM_MAX - ZOOM_MIN) / ZOOM_STEP),
-        value=DEFAULT_PREVIEW_ZOOM,
+        min=0,
+        max=1,
+        divisions=ZOOM_SLIDER_DIVISIONS,
+        value=0.5,
         active_color=C_ACCENT,
         inactive_color=C_BORDER,
         on_change=lambda e: on_zoom_change(e),
@@ -1747,7 +1982,16 @@ def main(page: ft.Page):
     )
 
     def set_status(message):
-        pass
+        if message:
+            preview_meta.value = message
+        elif engine.base_image:
+            preview_meta.value = (
+                f"Tile {engine.preview_tile:02d} of 46  ·  "
+                f"{engine.base_image.size[0]}×{engine.base_image.size[1]}"
+            )
+        else:
+            preview_meta.value = ""
+        safe_page_update(preview_meta)
 
     def show_toast(message, *, error=False, duration=None):
         if not message:
@@ -1781,28 +2025,37 @@ def main(page: ft.Page):
         repaint_preview(live=True)
         safe_page_update(preview_image, preview_tile_layer)
 
+    def center_preview_surface():
+        if engine.base_image is None:
+            return
+        engine.set_preview_viewport(preview_viewport["w"], preview_viewport["h"])
+        engine.center_view()
+        sync_preview_tile_layer()
+
     def refresh_preview():
         if engine.base_image is None:
             if preview_has_texture["active"]:
                 preview_has_texture["active"] = False
-                preview_inner.content = ft.Container(
+                preview_surface.content = ft.Container(
                     content=empty_state,
                     alignment=ft.Alignment(0, 0),
                     expand=True,
+                    on_size_change=on_preview_resize,
                 )
             preview_meta.value = ""
             paint_toolbar.visible = False
             safe_page_update(
-                preview_inner, preview_meta, paint_toolbar, preview_title
+                preview_surface, preview_meta, paint_toolbar, preview_title
             )
             return
 
         layout_changed = False
         if not preview_has_texture["active"]:
             preview_has_texture["active"] = True
-            preview_inner.content = ft.Container(
+            preview_surface.content = ft.Container(
                 content=preview_gesture,
                 expand=True,
+                on_size_change=on_preview_resize,
             )
             paint_toolbar.visible = True
             layout_changed = True
@@ -1823,22 +2076,27 @@ def main(page: ft.Page):
             paint_toolbar,
         ]
         if layout_changed:
-            controls.insert(0, preview_inner)
+            controls.insert(0, preview_surface)
         safe_page_update(*controls)
-
+        if layout_changed:
+            page.run_task(remeasure_preview)
 
     def on_preview_resize(e: ft.LayoutSizeChangeEvent):
-        w = max(int(e.width or 800), 200)
-        h = max(int(e.height or 600), 200)
-        if w == preview_viewport["w"] and h == preview_viewport["h"]:
-            return
+        w = sanitize_viewport_dim(e.width, 800)
+        h = sanitize_viewport_dim(e.height, 600)
+        changed = w != preview_viewport["w"] or h != preview_viewport["h"]
         preview_viewport["w"] = w
         preview_viewport["h"] = h
+        engine.set_preview_viewport(w, h)
         if engine.base_image is None:
             return
-        engine.center_view(w, h)
         repaint_preview()
-        safe_page_update(preview_image, preview_tile_layer)
+        sync_preview_tile_layer()
+        if changed:
+            safe_page_update(preview_image, preview_tile_layer)
+
+    def on_page_resize(_=None):
+        page.run_task(remeasure_preview)
 
     def on_hex_change(e):
         if syncing_hex["active"]:
@@ -1899,7 +2157,7 @@ def main(page: ft.Page):
             if alpha is not None:
                 engine.border_alpha = alpha
                 alpha_slider.value = alpha
-                alpha_value.value = str(int(alpha))
+                set_alpha_value_display(alpha)
             engine.invalidate_border_cache()
             safe_page_update(
                 outline_swatch, border_hex_field, alpha_slider, alpha_value
@@ -1928,8 +2186,8 @@ def main(page: ft.Page):
         outline_swatch.bgcolor = ft.Colors.with_opacity(a / 255, hex_value)
         if alpha is not None:
             alpha_slider.value = alpha
-            alpha_value.value = str(int(alpha))
             engine.border_alpha = alpha
+            set_alpha_value_display(alpha)
         safe_page_update(outline_swatch, border_hex_field, alpha_slider, alpha_value)
 
     def apply_sampled_color(hex_raw, target):
@@ -2097,16 +2355,17 @@ def main(page: ft.Page):
         edit_history["applying"] = False
         sync_history_buttons()
 
-    def on_keyboard(e: ft.KeyboardEvent):
-        if not (e.ctrl or e.meta):
+    def focus_preview_keyboard():
+        listener = preview_keyboard_listener["control"]
+        if listener is None:
             return
-        key = e.key.lower()
-        if key == "z" and not e.shift:
-            undo_edit()
-        elif key == "y" or (key == "z" and e.shift):
-            redo_edit()
 
-    page.on_keyboard_event = on_keyboard
+        async def _focus():
+            await listener.focus()
+
+        page.run_task(_focus)
+
+    page.on_keyboard_event = lambda e: None
 
     async def warm_picker_cache(_=None):
         get_hue_strip_src()
@@ -2539,80 +2798,165 @@ def main(page: ft.Page):
         get_sv_plane_src(h0)
         page.show_dialog(dialog)
 
-    def sync_border_ui():
-        border_slider.value = engine.border_width
-        border_value.value = f"{engine.border_width} px"
+    def set_border_width_display(width):
+        syncing_border_value["active"] = True
+        border_value.value = str(int(width))
+        syncing_border_value["active"] = False
 
-    def on_border_change(e):
-        engine.border_width = max(0, int(round(e.control.value)))
-        engine.invalidate_border_cache()
-        sync_border_ui()
+    def set_alpha_value_display(alpha):
+        syncing_alpha_value["active"] = True
+        alpha_value.value = str(int(alpha))
+        syncing_alpha_value["active"] = False
+
+    def border_width_limits():
+        max_width = engine.ui_border_width_max()
+        return 0, max_width
+
+    def apply_border_width(width):
+        min_w, max_w = border_width_limits()
         if engine.base_image:
-            border_slider.max = max(1, engine.base_image.width // 2)
+            border_slider.max = max_w
+            border_slider.divisions = border_slider_divisions(max_w)
+        width = max(min_w, min(max_w, int(round(width))))
+        engine.border_width = width
+        engine.invalidate_border_cache()
+        border_slider.value = width
+        set_border_width_display(width)
+        page.update(border_slider, border_value)
         refresh_preview()
 
-    def on_alpha_change(e):
-        engine.border_alpha = int(e.control.value)
+    def apply_border_alpha(alpha):
+        alpha = max(0, min(255, int(round(alpha))))
+        engine.border_alpha = alpha
         engine.invalidate_border_cache()
-        alpha_value.value = str(engine.border_alpha)
+        alpha_slider.value = alpha
+        set_alpha_value_display(alpha)
         outline_swatch.bgcolor = ft.Colors.with_opacity(
-            engine.border_alpha / 255,
+            alpha / 255,
             rgb_to_hex(engine.border_color),
         )
-        safe_page_update(outline_swatch, alpha_value)
+        page.update(alpha_slider, alpha_value, outline_swatch)
         refresh_preview()
+
+    def on_border_value_commit(_=None):
+        if syncing_border_value["active"]:
+            return
+        try:
+            text = (border_value.value or "").strip().lower().replace("px", "").strip()
+            apply_border_width(int(text))
+        except ValueError:
+            set_border_width_display(engine.border_width)
+            page.update(border_value)
+
+    def on_alpha_value_commit(_=None):
+        if syncing_alpha_value["active"]:
+            return
+        try:
+            apply_border_alpha(int((alpha_value.value or "").strip()))
+        except ValueError:
+            set_alpha_value_display(engine.border_alpha)
+            page.update(alpha_value)
+
+    border_value.on_submit = on_border_value_commit
+
+    def on_border_value_blur(e):
+        on_text_focus_out(e)
+        on_border_value_commit()
+
+    def on_alpha_value_blur(e):
+        on_text_focus_out(e)
+        on_alpha_value_commit()
+
+    border_value.on_blur = on_border_value_blur
+    border_value.on_focus = on_text_focus_in
+    alpha_value.on_submit = on_alpha_value_commit
+    alpha_value.on_blur = on_alpha_value_blur
+    alpha_value.on_focus = on_text_focus_in
+
+    def sync_border_ui():
+        border_slider.value = engine.border_width
+        set_border_width_display(engine.border_width)
+
+    def on_border_change(e):
+        apply_border_width(e.control.value)
+
+    def on_alpha_change(e):
+        apply_border_alpha(e.control.value)
 
     alpha_slider.on_change_start = lambda e: push_undo_color("border")
 
-    def max_zoom_for_texture():
-        if engine.base_image is None:
-            return ZOOM_MAX
-        tex_w, tex_h = engine.base_image.size
-        px_cap = min(
-            PREVIEW_MAX_PX,
-            max(preview_viewport["w"], preview_viewport["h"]) * 3,
+    def zoom_from_slider_pos(pos):
+        fit = fit_zoom_for_texture()
+        pct = ZOOM_PERCENT_MIN + float(pos) * (
+            ZOOM_PERCENT_MAX - ZOOM_PERCENT_MIN
         )
-        by_pixels = px_cap / (max(tex_w, tex_h) * PREVIEW_TEXEL_SCALE)
-        min_z = min_zoom_for_texture()
-        return min(ZOOM_MAX, max(min_z, by_pixels))
+        min_z = fit * (ZOOM_PERCENT_MIN / 100)
+        max_z = fit * (ZOOM_PERCENT_MAX / 100)
+        zoom = fit * (pct / 100.0)
+        return max(min_z, min(max_z, zoom))
 
-    def min_zoom_for_texture():
+    def slider_pos_from_zoom(zoom):
+        fit = fit_zoom_for_texture()
+        if fit <= 0:
+            return 0.0
+        pct = (zoom / fit) * 100
+        pct = max(ZOOM_PERCENT_MIN, min(ZOOM_PERCENT_MAX, pct))
+        return (pct - ZOOM_PERCENT_MIN) / (ZOOM_PERCENT_MAX - ZOOM_PERCENT_MIN)
+
+    def zoom_percent_from_zoom(zoom):
+        fit = fit_zoom_for_texture()
+        if fit <= 0:
+            return ZOOM_PERCENT_FIT
+        pct = round((zoom / fit) * 100)
+        return max(ZOOM_PERCENT_MIN, min(ZOOM_PERCENT_MAX, pct))
+
+    def zoom_from_percent(percent):
+        fit = fit_zoom_for_texture()
+        percent = max(ZOOM_PERCENT_MIN, min(ZOOM_PERCENT_MAX, percent))
+        return fit * (percent / 100.0)
+
+    def zoom_limits_and_step():
+        fit = fit_zoom_for_texture()
+        min_z = fit * (ZOOM_PERCENT_MIN / 100)
+        max_z = fit * (ZOOM_PERCENT_MAX / 100)
+        step = zoom_step_for_span(max_z - min_z)
+        return min_z, max_z, step, fit
+
+    def fit_zoom_for_texture():
         if engine.base_image is None:
-            return ZOOM_MIN
+            return DEFAULT_PREVIEW_ZOOM
         tex_w, tex_h = engine.base_image.size
-        vw = max(preview_viewport["w"], 200)
-        vh = max(preview_viewport["h"], 200)
+        vw = max(engine.preview_viewport_w, preview_viewport["w"], 200)
+        vh = max(engine.preview_viewport_h, preview_viewport["h"], 200)
         fit = min(
             vw / (tex_w * PREVIEW_TEXEL_SCALE),
             vh / (tex_h * PREVIEW_TEXEL_SCALE),
         )
-        if fit >= ZOOM_MIN:
-            return ZOOM_MIN
-        return max(0.05, round(fit * 0.95, 2))
+        return max(0.01, fit)
 
     def zoom_limits_for_texture():
-        min_z = min_zoom_for_texture()
-        max_z = max_zoom_for_texture()
+        fit = fit_zoom_for_texture()
+        min_z = fit * (ZOOM_PERCENT_MIN / 100)
+        max_z = fit * (ZOOM_PERCENT_MAX / 100)
         return min_z, max(min_z, max_z)
 
     def update_zoom_slider_range():
-        min_z, max_z = zoom_limits_for_texture()
-        zoom_slider.min = min_z
-        zoom_slider.max = max_z
-        span = max_z - min_z
-        zoom_slider.divisions = max(1, int(round(span / ZOOM_STEP)))
+        if engine.base_image is None:
+            return
+        syncing_zoom["active"] = True
+        zoom_slider.value = slider_pos_from_zoom(engine.zoom)
+        syncing_zoom["active"] = False
 
     def format_zoom(value):
-        min_z, max_z = zoom_limits_for_texture()
-        return f"{snap_zoom(value, max_z, min_z):.1f}×"
+        return f"{zoom_percent_from_zoom(value)}%"
 
     def sync_zoom_ui(update_slider=True):
-        min_z, max_z = zoom_limits_for_texture()
-        engine.zoom = snap_zoom(engine.zoom, max_z, min_z)
+        min_z, max_z, _step, _fit = zoom_limits_and_step()
+        engine.zoom = max(min_z, min(max_z, engine.zoom))
         syncing_zoom["active"] = True
         update_zoom_slider_range()
         if update_slider:
-            zoom_slider.value = engine.zoom
+            zoom_slider.value = slider_pos_from_zoom(engine.zoom)
         zoom_value.value = format_zoom(engine.zoom)
         syncing_zoom["active"] = False
         controls = [zoom_value]
@@ -2622,16 +2966,14 @@ def main(page: ft.Page):
 
     def reset_preview_zoom():
         if engine.base_image:
-            min_z, max_z = zoom_limits_for_texture()
-            target = min(DEFAULT_PREVIEW_ZOOM, max_z)
-            engine.zoom = snap_zoom(max(min_z, target), max_z, min_z)
-            engine.center_view(preview_viewport["w"], preview_viewport["h"])
+            engine.zoom = fit_zoom_for_texture()
+            center_preview_in_viewport()
         else:
             engine.zoom = snap_zoom(DEFAULT_PREVIEW_ZOOM)
         sync_zoom_ui()
 
     def preview_center():
-        return preview_viewport["w"] / 2, preview_viewport["h"] / 2
+        return engine.preview_viewport_w / 2, engine.preview_viewport_h / 2
 
     def set_preview_zoom(new_zoom, focal_x, focal_y):
         min_z, max_z = zoom_limits_for_texture()
@@ -2666,7 +3008,7 @@ def main(page: ft.Page):
         if syncing_zoom["active"]:
             return
         cx, cy = preview_center()
-        set_preview_zoom(float(e.control.value), cx, cy)
+        set_preview_zoom(zoom_from_slider_pos(e.control.value), cx, cy)
         zoom_value.value = format_zoom(engine.zoom)
         page.update(zoom_value)
         refresh_zoom_preview(live=True)
@@ -2676,26 +3018,40 @@ def main(page: ft.Page):
         if syncing_zoom["active"]:
             return
         cx, cy = preview_center()
-        set_preview_zoom(float(e.control.value), cx, cy)
+        set_preview_zoom(zoom_from_slider_pos(e.control.value), cx, cy)
+        engine.center_view()
         sync_zoom_ui()
         refresh_zoom_preview(live=False)
 
     def on_preview_scroll(e: ft.ScrollEvent):
-        if syncing_zoom["active"]:
+        if syncing_zoom["active"] or engine.base_image is None:
+            return
+        focus_preview_keyboard()
+        if not ctrl_tracker.pressed:
             return
         if drawing_state["active"] and drawing_state["undo_snapshotted"]:
             return
-        if e.local_position is None:
+
+        dy = float(e.scroll_delta.y or 0)
+        if abs(dy) < 1e-6:
+            dx = float(e.scroll_delta.x or 0)
+            if abs(dx) < 1e-6:
+                return
+            dy = dx
+
+        if e.local_position is not None:
+            focal_x, focal_y = e.local_position.x, e.local_position.y
+        else:
+            focal_x, focal_y = preview_center()
+
+        pct = zoom_percent_from_zoom(engine.zoom)
+        zoom_in = scroll_wheel_zooms_in(dy)
+        next_pct = pct + (ZOOM_SCROLL_STEP if zoom_in else -ZOOM_SCROLL_STEP)
+        if next_pct == pct:
             return
-        dy = e.scroll_delta.y
-        if abs(dy) < 0.01:
-            return
-        step = ZOOM_STEP if dy < 0 else -ZOOM_STEP
-        min_z, max_z = zoom_limits_for_texture()
-        new_zoom = snap_zoom(engine.zoom + step, max_z, min_z)
-        if new_zoom == engine.zoom:
-            return
-        set_preview_zoom(new_zoom, e.local_position.x, e.local_position.y)
+
+        new_zoom = zoom_from_percent(next_pct)
+        set_preview_zoom(new_zoom, focal_x, focal_y)
         sync_zoom_ui()
         refresh_zoom_preview(live=True)
         schedule_zoom_finalize()
@@ -2842,7 +3198,58 @@ def main(page: ft.Page):
         engine.preview_tile = max(0, min(46, engine.preview_tile + delta))
         refresh_preview()
 
+    def adjust_zoom_shortcut(delta_percent):
+        if engine.base_image is None:
+            return
+        cx, cy = preview_center()
+        pct = zoom_percent_from_zoom(engine.zoom)
+        next_pct = max(
+            ZOOM_PERCENT_MIN,
+            min(ZOOM_PERCENT_MAX, pct + delta_percent),
+        )
+        if next_pct == pct:
+            return
+        set_preview_zoom(zoom_from_percent(next_pct), cx, cy)
+        sync_zoom_ui()
+        refresh_zoom_preview(live=False)
+
+    def on_keyboard(e: ft.KeyboardEvent):
+        ctrl_tracker.on_flet_keyboard(e)
+
+        if not text_field_shortcuts_blocked():
+            if (
+                e.key == "Arrow Left"
+                and not (e.ctrl or e.meta or e.alt or e.shift)
+                and engine.base_image is not None
+            ):
+                step_tile(-1)
+                return
+            if (
+                e.key == "Arrow Right"
+                and not (e.ctrl or e.meta or e.alt or e.shift)
+                and engine.base_image is not None
+            ):
+                step_tile(1)
+                return
+            if e.key == "[" and not (e.ctrl or e.meta or e.alt):
+                adjust_zoom_shortcut(-ZOOM_SCROLL_STEP)
+                return
+            if e.key == "]" and not (e.ctrl or e.meta or e.alt):
+                adjust_zoom_shortcut(ZOOM_SCROLL_STEP)
+                return
+
+        if not (e.ctrl or e.meta):
+            return
+        key = e.key.lower()
+        if key == "z" and not e.shift:
+            undo_edit()
+        elif key == "y" or (key == "z" and e.shift):
+            redo_edit()
+
+    page.on_keyboard_event = on_keyboard
+
     def on_preview_tap(e: ft.TapEvent):
+        focus_preview_keyboard()
         if bucket_state["active"]:
             on_preview_bucket(e)
             return
@@ -2885,9 +3292,33 @@ def main(page: ft.Page):
             edit_history["undo"].pop()
             sync_history_buttons()
 
+    def on_preview_camera_pan_start(_: ft.PointerEvent):
+        if engine.base_image is None:
+            return
+        focus_preview_keyboard()
+        preview_camera_pan["active"] = True
+        preview_gesture.mouse_cursor = ft.MouseCursor.GRABBING
+        page.update(preview_gesture)
+
+    def on_preview_camera_pan_update(e: ft.PointerEvent):
+        if not preview_camera_pan["active"] or engine.base_image is None:
+            return
+        delta = e.local_delta
+        if delta is None:
+            return
+        engine.preview_pan_x += float(delta.x)
+        engine.preview_pan_y += float(delta.y)
+        sync_preview_tile_layer()
+        safe_page_update(preview_tile_layer)
+
+    def on_preview_camera_pan_end(_: ft.PointerEvent):
+        preview_camera_pan["active"] = False
+        sync_preview_gestures()
+
     def on_preview_pan_start(e: ft.DragStartEvent):
         if not drawing_state["active"] or e.local_position is None:
             return
+        focus_preview_keyboard()
         if not drawing_state["undo_snapshotted"]:
             push_undo_image()
             drawing_state["undo_snapshotted"] = True
@@ -2934,21 +3365,34 @@ def main(page: ft.Page):
             on_preview_tap if picking or bucketing else None
         )
         preview_gesture.on_scroll = on_preview_scroll
+        preview_gesture.on_right_pan_start = (
+            on_preview_camera_pan_start if engine.base_image is not None else None
+        )
+        preview_gesture.on_right_pan_update = (
+            on_preview_camera_pan_update if engine.base_image is not None else None
+        )
+        preview_gesture.on_right_pan_end = (
+            on_preview_camera_pan_end if engine.base_image is not None else None
+        )
         preview_gesture.mouse_cursor = (
-            ft.MouseCursor.PRECISE
+            ft.MouseCursor.GRABBING
+            if preview_camera_pan["active"]
+            else ft.MouseCursor.PRECISE
             if drawing or picking or bucketing
             else ft.MouseCursor.BASIC
         )
         page.update(preview_gesture)
 
-    preview_inner = ft.Container(
+    preview_surface = ft.Container(
         content=ft.Container(
             content=empty_state,
             alignment=ft.Alignment(0, 0),
             expand=True,
+            on_size_change=on_preview_resize,
         ),
         expand=True,
     )
+    preview_inner = ft.Container(content=preview_surface, expand=True)
     preview_checker = ft.Container(
         content=preview_inner,
         expand=True,
@@ -2960,7 +3404,29 @@ def main(page: ft.Page):
             repeat=ft.ImageRepeat.REPEAT,
             fit=ft.BoxFit.NONE,
         ),
-        on_size_change=on_preview_resize,
+    )
+
+    def on_ctrl_key_down(e: ft.KeyDownEvent):
+        ctrl_tracker.on_flet_key_down(e)
+
+    def on_ctrl_key_up(e: ft.KeyUpEvent):
+        ctrl_tracker.on_flet_key_up(e)
+
+    if ctrl_tracker.use_flet_fallback:
+        preview_body = ft.KeyboardListener(
+            content=preview_checker,
+            autofocus=True,
+            on_key_down=on_ctrl_key_down,
+            on_key_up=on_ctrl_key_up,
+        )
+        preview_keyboard_listener["control"] = preview_body
+    else:
+        preview_body = preview_checker
+        preview_keyboard_listener["control"] = None
+
+    preview_frame = ft.Container(
+        content=preview_body,
+        expand=True,
     )
 
     def sync_tools_ui():
@@ -3003,17 +3469,19 @@ def main(page: ft.Page):
         edit_history["undo"].clear()
         edit_history["redo"].clear()
         sync_history_buttons()
-        max_width = max(1, img.width // 2)
+        max_width = engine.ui_border_width_max()
         border_slider.max = max_width
         border_slider.min = 0
-        border_slider.divisions = max_width
+        border_slider.divisions = border_slider_divisions(max_width)
         if engine.border_width > max_width:
             engine.border_width = max_width
-        if engine.border_width < 1:
+        if max_width == 0:
+            engine.border_width = 0
+        elif engine.border_width < 1:
             engine.border_width = 1
         sync_border_ui()
         alpha_slider.value = engine.border_alpha
-        alpha_value.value = str(engine.border_alpha)
+        set_alpha_value_display(engine.border_alpha)
         outline_swatch.bgcolor = ft.Colors.with_opacity(
             int(engine.border_alpha) / 255,
             rgb_to_hex(engine.border_color),
@@ -3043,12 +3511,22 @@ def main(page: ft.Page):
         page.run_task(remeasure_preview)
 
     async def remeasure_preview(_=None):
-        await asyncio.sleep(0.05)
-        if engine.base_image is None:
-            return
-        engine.center_view(preview_viewport["w"], preview_viewport["h"])
-        repaint_preview()
-        safe_page_update(preview_image, preview_tile_layer)
+        last_size = None
+        for _ in range(10):
+            await asyncio.sleep(0.05)
+            if engine.base_image is None:
+                return
+            try:
+                page.update(preview_surface, paint_toolbar)
+            except RuntimeError:
+                pass
+            engine.set_preview_viewport(preview_viewport["w"], preview_viewport["h"])
+            size = (preview_viewport["w"], preview_viewport["h"])
+            center_preview_in_viewport()
+            safe_page_update(preview_image, preview_tile_layer)
+            if size == last_size:
+                break
+            last_size = size
 
     def load_outline_path(path):
         try:
@@ -3074,7 +3552,10 @@ def main(page: ft.Page):
         engine.custom_outline_image = img
         engine.invalidate_border_cache()
         if engine.border_width == 0:
-            engine.border_width = max(1, img.width // 8)
+            engine.border_width = min(
+                max(1, engine.ui_border_width_max()),
+                max(1, img.width // 8),
+            )
         sync_border_ui()
         set_status("Outline loaded")
         refresh_preview()
@@ -3115,9 +3596,6 @@ def main(page: ft.Page):
         except Exception as ex:
             show_toast(f"File dialog failed: {ex}", error=True)
 
-    preview_drop_target = preview_checker
-    preview_drop_target.expand = True
-
     async def open_save_folder(_=None):
         folder = engine.last_save_directory
         if not folder:
@@ -3135,6 +3613,46 @@ def main(page: ft.Page):
         if not open_path_in_file_manager(folder):
             show_toast("Could not open folder", error=True)
 
+    async def confirm_overwrite_dialog(folder_path):
+        future = asyncio.get_running_loop().create_future()
+        overwrite_dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Overwrite existing pack?"),
+            content=ft.Text(
+                f'"{folder_path}" already exists. Generating will replace its files.'
+            ),
+            actions=[
+                ft.TextButton(
+                    "Cancel",
+                    on_click=lambda e: close_overwrite_dialog(False),
+                ),
+                ft.TextButton(
+                    "Overwrite",
+                    on_click=lambda e: close_overwrite_dialog(True),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        def close_overwrite_dialog(confirmed):
+            if not future.done():
+                future.set_result(confirmed)
+            page.close(overwrite_dlg)
+
+        page.open(overwrite_dlg)
+        return await future
+
+    async def write_generated_pack(save_dir):
+        set_status("Generating…")
+        page.update()
+        try:
+            out_path = engine.generate(save_dir)
+            set_status("Pack generated")
+            show_toast(f"Saved to {out_path}", duration=4.0)
+        except Exception as ex:
+            show_toast(str(ex), error=True)
+            set_status("Generation failed")
+
     async def generate_pack(_=None):
         if engine.base_image is None:
             return
@@ -3150,15 +3668,11 @@ def main(page: ft.Page):
             return
         engine.last_save_directory = save_dir
         save_last_save_directory(save_dir)
-        set_status("Generating…")
-        page.update()
-        try:
-            out_path = engine.generate(save_dir)
-            set_status("Pack generated")
-            show_toast(f"Saved to {out_path}", duration=4.0)
-        except Exception as ex:
-            show_toast(str(ex), error=True)
-            set_status("Generation failed")
+        out_path = os.path.join(save_dir, engine.base_filename)
+        if os.path.isdir(out_path):
+            if not await confirm_overwrite_dialog(out_path):
+                return
+        await write_generated_pack(save_dir)
 
     appearance_icon = ft.Icon(ft.Icons.PALETTE_OUTLINED, size=16, color=C_MUTED)
     appearance_label = ft.Text("Appearance", size=12, color=C_TEXT, expand=True)
@@ -3351,7 +3865,7 @@ def main(page: ft.Page):
                     spacing=10,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                preview_drop_target,
+                preview_frame,
                 paint_toolbar,
                 preview_toolbar,
             ],
@@ -3411,8 +3925,15 @@ def main(page: ft.Page):
         appearance_label.color = C_TEXT
         tile_label.color = C_MUTED
         zoom_label.color = C_MUTED
-        for value in (border_value, alpha_value, zoom_value, tolerance_value):
+        for value in (zoom_value, tolerance_value):
             value.color = C_MUTED
+        for field in (border_value, alpha_value):
+            field.bgcolor = C_CHIP
+            field.border_color = C_BORDER
+            field.focused_border_color = C_ACCENT
+            field.color = C_TEXT
+            if field.suffix is not None:
+                field.suffix.color = C_MUTED
         tile_value.color = C_TEXT
         appearance_icon.color = C_MUTED
         appearance_chevron.color = C_MUTED
@@ -3502,6 +4023,7 @@ def main(page: ft.Page):
             spacing=0,
         )
     )
+    page.on_resize = on_page_resize
     apply_theme_to_ui(theme_id)
     refresh_preview()
     sync_border_mode_ui()

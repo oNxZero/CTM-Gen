@@ -13,8 +13,8 @@ Python + [Flet](https://flet.dev) + Pillow. Everything lives in `main.py`.
 ## What it does
 
 - Slices one source image into all 47 standard CTM tiles
-- Live preview with zoom
-- Colored frame borders (width, alpha, color, eyedropper) or a custom frame PNG
+- Live preview with zoom and right-click pan
+- Colored frame borders (width up to 16 px, alpha, color, eyedropper) or a custom frame PNG
 - Basic paint tools on the loaded texture: pick, brush, fill, undo/redo
 - Red guide lines for where borders get cut
 - **Debug tile IDs**: stamps each tile with its index in red so you can see what OptiFine picks in-game, then regenerate without debug when you're done
@@ -33,13 +33,18 @@ Linux and Windows. Use `python` or `python3` depending on what your system has.
 
 ## Quick start
 
-1. **Open texture**: your base block PNG.
+1. **Open texture**: click **Open texture** or use **New texture**.
 2. Pick a border mode:
    - **Colored frame**: procedural border. Eyedropper samples from the preview.
-   - **Custom PNG**: separate image with just the frame (transparent center).
-3. Zoom, toggle guide lines, paint if something needs a touch-up.
-4. **Generate pack**: choose a folder. The app writes a subfolder with all tiles and the properties file.
-5. Copy the output into your resource pack:
+   - **Custom PNG**: separate image with just the frame (transparent center). Use **Open outline** while this mode is active.
+3. Preview controls:
+   - **Zoom slider** or **Ctrl + scroll** (50%–500%)
+   - **← / →** to change tiles
+   - **[ / ]** to zoom out / in
+   - **Ctrl+Z / Ctrl+Y** for undo / redo
+4. Toggle guide lines, paint if something needs a touch-up.
+5. **Generate pack**: choose a folder. If that pack folder already exists, the app asks before overwriting.
+6. Copy the output into your resource pack:
 
 ```
 assets/minecraft/optifine/ctm/<your_texture_name>/
