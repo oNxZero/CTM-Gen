@@ -47,7 +47,7 @@ Linux and Windows. Use `python` or `python3` depending on what your system has.
 6. Copy the output into your resource pack:
 
 ```
-assets/minecraft/optifine/ctm/<your_texture_name>/
+assets/minecraft/mcpatcher/ctm/<your_texture_name>/
 ```
 
 If CTM looks wrong in-game, turn on **Debug tile IDs** in the Export panel, place blocks, note which numbers show up on bad faces, fix the source, turn debug off, and export again.
