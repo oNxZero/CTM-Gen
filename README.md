@@ -16,7 +16,12 @@ Create and edit 47-tile connected textures from a block PNG.
 
 Choose a border, check the connections, make any paint edits, and export the
 PNG tiles with their OptiFine `.properties` file.
-[Watch the walkthrough](https://youtu.be/WXpYSz8xrRo) for a longer guide.
+
+## Guide video
+
+[![Watch the CTM Generator guide on YouTube](https://img.youtube.com/vi/WXpYSz8xrRo/hqdefault.jpg)](https://youtu.be/WXpYSz8xrRo)
+
+[Watch the full guide on YouTube](https://youtu.be/WXpYSz8xrRo).
 
 ## Run it
 
