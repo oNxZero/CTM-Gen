@@ -12,7 +12,7 @@ Create and edit 47-tile connected textures from a block PNG.
 
 </div>
 
-![CTM Generator: loading a texture, changing its border, and previewing connections](docs/workflow.gif)
+![Loading a texture, changing its border, painting, undoing and exporting](docs/editing-workflow.gif)
 
 Choose a border, check the connections, make any paint edits, and export the
 PNG tiles with their OptiFine `.properties` file.
@@ -56,7 +56,10 @@ On Linux, native file dialogs need your distribution's `zenity` package.
 4. Click **Generate pack** and choose an output folder. Existing output asks
    for confirmation before files are replaced.
 
-![Previewing the generated CTM tile connections](docs/tiles.gif)
+![A repeated single tile compared with connected layouts using the exported CTM tiles](docs/connected-layouts.gif)
+
+The layout preview above is assembled from exported PNGs. It shows how outer
+edges and inner corners change as the blocks around a tile change.
 
 For a source named `sand.png`, the export contains:
 
