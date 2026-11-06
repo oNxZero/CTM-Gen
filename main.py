@@ -8,9 +8,7 @@ import os
 import platform
 import shutil
 import subprocess
-import sys
 import tempfile
-import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -488,17 +486,6 @@ def clamp_zoom(value, max_zoom=None, min_zoom=None):
     return max(min_z, min(cap, float(value)))
 
 
-def format_zoom_value(value, fit_zoom, min_zoom=None, max_zoom=None, step=None):
-    min_z = min_zoom if min_zoom is not None else ZOOM_MIN
-    cap = max_zoom if max_zoom is not None else ZOOM_MAX
-    zoom = snap_zoom(value, cap, min_z, step)
-    if fit_zoom > 0:
-        return f"{zoom / fit_zoom * 100:.0f}%"
-    if zoom < 1:
-        return f"{zoom:.2f}×"
-    return f"{zoom:.1f}×"
-
-
 # Design tokens (updated by theme)
 C_BG = "#0f1117"
 C_PANEL = "#16181f"
@@ -508,14 +495,12 @@ C_BORDER = "#3d4451"
 C_TEXT = "#e8eaed"
 C_MUTED = "#9aa0a9"
 C_ACCENT = "#5b9cf5"
-C_ACCENT_DIM = "#3d7dd6"
-C_SNACK_OK = "#1e3a5f"
 C_ON_ACCENT = "#ffffff"
 
 
 def apply_theme_colors(theme_id):
     global C_BG, C_PANEL, C_SURFACE, C_CHIP, C_BORDER, C_TEXT, C_MUTED
-    global C_ACCENT, C_ACCENT_DIM, C_SNACK_OK, C_ON_ACCENT
+    global C_ACCENT, C_ON_ACCENT
     t = get_theme(theme_id)
     C_BG = t["bg"]
     C_PANEL = t["panel"]
@@ -525,8 +510,6 @@ def apply_theme_colors(theme_id):
     C_TEXT = t["text"]
     C_MUTED = t["muted"]
     C_ACCENT = t["accent"]
-    C_ACCENT_DIM = t["accent_dim"]
-    C_SNACK_OK = t["snack_ok"]
     C_ON_ACCENT = t.get("on_accent", C_TEXT)
     return t
 ICON_BTN_STYLE = ft.ButtonStyle(
@@ -969,18 +952,6 @@ def tiled_checkerboard(width, height, tile_size=16):
         for x in range(0, width, tile_size):
             canvas.paste(tile, (x, y))
     return canvas
-
-
-_VIEWPORT_CHECKER_CACHE = {}
-
-
-def cached_viewport_checkerboard(width, height):
-    key = (width, height)
-    cached = _VIEWPORT_CHECKER_CACHE.get(key)
-    if cached is None:
-        cached = tiled_checkerboard(width, height)
-        _VIEWPORT_CHECKER_CACHE[key] = cached
-    return cached.copy()
 
 
 def is_remembered_directory(path):
@@ -2024,13 +1995,6 @@ def main(page: ft.Page):
         draw_update_clock["t"] = now
         repaint_preview(live=True)
         safe_page_update(preview_image, preview_tile_layer)
-
-    def center_preview_surface():
-        if engine.base_image is None:
-            return
-        engine.set_preview_viewport(preview_viewport["w"], preview_viewport["h"])
-        engine.center_view()
-        sync_preview_tile_layer()
 
     def refresh_preview():
         if engine.base_image is None:
@@ -3637,9 +3601,9 @@ def main(page: ft.Page):
         def close_overwrite_dialog(confirmed):
             if not future.done():
                 future.set_result(confirmed)
-            page.close(overwrite_dlg)
+            page.pop_dialog()
 
-        page.open(overwrite_dlg)
+        page.show_dialog(overwrite_dlg)
         return await future
 
     async def write_generated_pack(save_dir):
@@ -3858,6 +3822,11 @@ def main(page: ft.Page):
             [
                 ft.Row(
                     [
+                        ft.Image(
+                            src="icon.png", width=32, height=32,
+                            fit=ft.BoxFit.CONTAIN,
+                            semantics_label="CTM Generator logo",
+                        ),
                         preview_title,
                         status_toast,
                         preview_meta,
@@ -4118,22 +4087,21 @@ def main(page: ft.Page):
                 modal=True,
                 bgcolor=C_PANEL,
                 shape=ft.RoundedRectangleBorder(radius=16),
-                title=ft.Column(
+                title=ft.Row(
                     [
+                        ft.Image(
+                            src="icon.png", width=48, height=48,
+                            fit=ft.BoxFit.CONTAIN,
+                            semantics_label="CTM Generator logo",
+                        ),
                         ft.Text(
                             "Welcome to CTM Generator",
                             size=22,
                             weight=ft.FontWeight.W_600,
                             color=C_TEXT,
                         ),
-                        ft.Text(
-                            "Connected Texture Mod pack builder",
-                            size=13,
-                            color=C_MUTED,
-                        ),
                     ],
-                    spacing=4,
-                    tight=True,
+                    spacing=12,
                 ),
                 content=ft.Container(
                     width=520,
@@ -4207,7 +4175,7 @@ def clear_flet_cache() -> None:
 def launch() -> int:
     os.chdir(ROOT)
     clear_flet_cache()
-    ft.run(run_app)
+    ft.run(run_app, assets_dir=str(ROOT / "assets"))
     return 0
 
 

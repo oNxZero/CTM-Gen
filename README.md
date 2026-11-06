@@ -1,67 +1,156 @@
+<div align="center">
+
+<img src="assets/icon.png" width="100" alt="CTM Generator logo">
+
 # CTM Generator
 
-Desktop tool for making OptiFine connected texture packs from a single block PNG. You load the texture, set up borders, preview the layout, and export tiles `0.png`–`46.png` plus the `.properties` file.
+Create and edit 47-tile connected textures from a block PNG.
 
-Python + [Flet](https://flet.dev) + Pillow. Everything lives in `main.py`.
+![Python](https://img.shields.io/badge/Python-3.10%2B-b7bdf8?style=flat-square)
+![Desktop](https://img.shields.io/badge/Desktop-Windows%20%7C%20Linux-8bd5ca?style=flat-square)
+[![Checks](https://github.com/oNxZero/CTM-Gen/actions/workflows/checks.yml/badge.svg)](https://github.com/oNxZero/CTM-Gen/actions/workflows/checks.yml)
 
-![CTM Generator UI Demo](assets/demo.png)
+</div>
 
-## Guide video
+![CTM Generator: loading a texture, changing its border, and previewing connections](docs/workflow.gif)
 
-[![Watch the guide on YouTube](https://img.youtube.com/vi/WXpYSz8xrRo/hqdefault.jpg)](https://youtu.be/WXpYSz8xrRo)
+Choose a border, check the connections, make any paint edits, and export the
+PNG tiles with their OptiFine `.properties` file.
+[Watch the walkthrough](https://youtu.be/WXpYSz8xrRo) for a longer guide.
 
-## What it does
+## Run it
 
-- Slices one source image into all 47 standard CTM tiles
-- Live preview with zoom and right-click pan
-- Colored frame borders (width up to 16 px, alpha, color, eyedropper) or a custom frame PNG
-- Basic paint tools on the loaded texture: pick, brush, fill, undo/redo
-- Red guide lines for where borders get cut
-- **Debug tile IDs**: stamps each tile with its index in red so you can see what OptiFine picks in-game, then regenerate without debug when you're done
-- A handful of UI themes (Moonlight is the default; also Light, Dark, Obsidian, Catppuccin, Dracula, Nord)
+Requires **Python 3.10 or newer** and Git. Clone the repository:
 
-## Install
-
-```bash
+```sh
 git clone https://github.com/oNxZero/CTM-Gen.git
 cd CTM-Gen
-pip install -r requirements.txt
-python main.py
 ```
 
-Linux and Windows. Use `python` or `python3` depending on what your system has.
+**Windows — PowerShell**
 
-## Quick start
-
-1. **Open texture**: click **Open texture** or use **New texture**.
-2. Pick a border mode:
-   - **Colored frame**: procedural border. Eyedropper samples from the preview.
-   - **Custom PNG**: separate image with just the frame (transparent center). Use **Open outline** while this mode is active.
-3. Preview controls:
-   - **Zoom slider** or **Ctrl + scroll** (50%–500%)
-   - **← / →** to change tiles
-   - **[ / ]** to zoom out / in
-   - **Ctrl+Z / Ctrl+Y** for undo / redo
-4. Toggle guide lines, paint if something needs a touch-up.
-5. **Generate pack**: choose a folder. If that pack folder already exists, the app asks before overwriting.
-6. Copy the output into your resource pack:
-
-```
-assets/minecraft/mcpatcher/ctm/<your_texture_name>/
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
 ```
 
-If CTM looks wrong in-game, turn on **Debug tile IDs** in the Export panel, place blocks, note which numbers show up on bad faces, fix the source, turn debug off, and export again.
+**Linux**
 
-## Settings
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python main.py
+```
 
-Theme and last save folder are stored in `~/.config/ctm-generator/settings.json`.
+On Linux, native file dialogs need your distribution's `zenity` package.
 
-Moonlight palette is from [oNxZero/Moonlight](https://github.com/oNxZero/Moonlight).
+## Make a texture
 
-## Credits
+1. **Open a block PNG**, or start with **New texture**. Name it after the Minecraft
+   texture you want to match: `sand.png`, for example, exports `matchTiles=sand`.
+2. Choose **Colored frame** for an adjustable border, or **Custom PNG** to load
+   an outline image with a transparent center.
+3. Step through the tiles and check their edges. Use Pick, Paint, or Fill to
+   edit one tile; enable **Paint on all tiles** to edit their shared source.
+4. Click **Generate pack** and choose an output folder. Existing output asks
+   for confirmation before files are replaced.
 
-Tile indexing idea from [Minecraft-Connected-Textures-Generator-CTM](https://github.com/Rostezkiy/Minecraft-Connected-Textures-Generator-CTM) by Rostezkiy. This repo is a rewrite with a new UI, preview, paint tools, and export flow.
+![Previewing the generated CTM tile connections](docs/tiles.gif)
 
-## License
+For a source named `sand.png`, the export contains:
 
-MIT
+```text
+sand/
+├── sand.properties
+├── 0.png
+├── 1.png
+├── ...
+└── 46.png
+```
+
+Copy the `sand` folder into your resource pack's CTM directory:
+
+```text
+assets/minecraft/optifine/ctm/
+```
+
+Older MCPatcher-style packs use `assets/minecraft/mcpatcher/ctm/` instead.
+Use the layout your target Minecraft version and CTM loader expect.
+The export contains textures and a rule; add it to a resource pack with a
+suitable `pack.mcmeta`. Minecraft needs a loader that supports
+[OptiFine's 47-tile CTM format](https://github.com/sp614x/optifine/blob/master/OptiFineDoc/doc/ctm.properties).
+
+## Preview and editing
+
+![CTM Generator with a sample texture](docs/editor.png)
+
+| Control | Action |
+| --- | --- |
+| Left / right arrow | Previous / next tile |
+| Ctrl + scroll, or `[` / `]` | Zoom |
+| Right-click drag | Pan |
+| Ctrl + Z | Undo paint edits |
+| Ctrl + Y or Ctrl + Shift + Z | Redo paint edits |
+
+The zoom slider runs from 50% to 500%. Guide lines show where borders are cut.
+**Debug tile IDs** stamps the tile number onto each exported image for checking
+connections in-game. Turn it off and export again when finished.
+
+Seven themes are available under **Appearance**, including Moonlight, Light,
+Catppuccin, and Nord. Settings and the last output folder are saved in
+`~/.config/ctm-generator/settings.json`.
+
+## Weird faces or broken connections in-game
+
+**Check block rotations too.** Minecraft randomly rotates some blocks' models,
+including sand. A texture can look right in the generator but have mismatched
+edges in-game because neighboring blocks use different rotations.
+
+For **Minecraft 1.21.1**, add this file to your resource pack to give sand one
+unrotated model:
+
+`assets/minecraft/blockstates/sand.json`
+
+```json
+{
+  "variants": {
+    "": {
+      "model": "minecraft:block/sand"
+    }
+  }
+}
+```
+
+For another block, use its blockstate filename and model. Keep any required
+state variants for blocks with properties such as facing or axis.
+
+If your Minecraft version uses the older `normal` blockstate format, use:
+
+```json
+{
+  "variants": {
+    "normal": [
+      { "model": "sand" }
+    ]
+  }
+}
+```
+
+If rotation is not the cause, enable **Debug tile IDs**, export, and check the
+numbers on the affected faces. Also check that `matchTiles` in the `.properties`
+file names the texture you are replacing.
+
+## Development
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+The demos are captured from the app using a generated sample texture.
+To recapture them, run `python tools/capture_demo.py` with a desktop session and FFmpeg installed.
+
+Built with [Flet](https://flet.dev) and [Pillow](https://python-pillow.org).
+The Moonlight palette comes from [Moonlight](https://github.com/oNxZero/Moonlight).
+Tile-indexing inspiration: [Rostezkiy's generator](https://github.com/Rostezkiy/Minecraft-Connected-Textures-Generator-CTM).
+License: MIT.
